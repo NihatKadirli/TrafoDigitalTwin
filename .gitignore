@@ -1,0 +1,27 @@
+
+# Unity
+/Library/
+/Temp/
+/Obj/
+/Build/
+/Builds/
+/Logs/
+/UserSettings/
+
+# IDE
+.idea/
+.vs/
+*.csproj
+*.sln
+*.userprefs
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Unity Package Manager
+/Packages/packages-lock.json
+
+# Asset cache
+/Assets/AssetStoreTools*
