@@ -1,439 +1,517 @@
-using UnityEngine;
-using TMPro;
-using System.Text;
-using System.Net.Sockets;
-using System.Threading;
-using System.Collections.Concurrent;
+using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.UI;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System;
 
 public class SimpleMQTTReceiver : MonoBehaviour
 {
+    
+    [Header("UI References")]
+    public Text temperatureText;      // Sıcaklık göstergesi
+    public Text voltageText;          // Gerilim göstergesi
+    public Text loadText;             // Yük göstergesi
+    public Text statusText;           // Durum göstergesi
+    public GameObject alarmPanel;     // Alarm paneli
+    
     [Header("MQTT Settings")]
-    public string brokerIP = "127.0.0.1";
+    public string brokerAddress = "localhost";
     public int brokerPort = 1883;
     public string topic = "TM1/Trafo/sensor";
     
-    [Header("UI Elements")]
-    public TMP_Text txtTemperature;
-    public TMP_Text txtVoltage;
-    public TMP_Text txtLoad;
-    public TMP_Text txtStatus;
-    
-    [Header("UI Colors")]
-    public Color normalColor = Color.white;
-    public Color warningColor = Color.yellow;
-    public Color dangerColor = Color.red;
-    public Color connectedColor = Color.green;
-    public Color disconnectedColor = Color.red;
-    
-    [Header("Debug")]
-    public bool debugMode = true;
-    
-    // Thread-safe systems
-    private ConcurrentQueue<string> messageQueue = new ConcurrentQueue<string>();
-    private ConcurrentQueue<System.Action> mainThreadQueue = new ConcurrentQueue<System.Action>();
-    private bool isRunning = false;
+    // MQTT bağlantısı için
+    private TcpClient tcpClient;
+    private NetworkStream stream;
     private Thread mqttThread;
-    
-    // Data
-    [System.Serializable]
-    public class TrafoData
-    {
-        public float sicaklik;
-        public float yag_sicaklik;
-        public float gerilim_primer;
-        public float gerilim_sekonder;
-        public float akim_primer;
-        public float akim_sekonder;
-        public float yuk_seviyesi;
-    }
-    
-    private TrafoData currentData = new TrafoData();
-    private int messageCount = 0;
     private bool isConnected = false;
+    private bool isRunning = true;
+    
+    // Son alınan veriler
+    private float lastTemperature = 72f;   // Başlangıç değeri
+    private float lastVoltage = 154f;       // Başlangıç değeri
+    private float lastLoad = 80f;           // Başlangıç değeri
+    private float lastMessageTime = 0;      // Time.time için float
+    
+    // ===== SALDIRI YÖNETİMİ İÇİN YENİ DEĞİŞKENLER =====
+    private bool isUnderAttack = false;
+    private string attackType = "";
+    private float attackValue = 0;
+    private bool dataLossSimulated = false;
     
     void Start()
     {
-        Log("=== MQTT RECEIVER STARTING ===");
-        Log("Platform: " + Application.platform);
-        Log("Broker: " + brokerIP + ":" + brokerPort);
-        Log("Topic: " + topic);
+        // UI referanslarını bul (eğer atanmadıysa)
+        if (temperatureText == null)
+            temperatureText = GameObject.Find("TemperatureValue")?.GetComponent<Text>();
+        if (voltageText == null)
+            voltageText = GameObject.Find("VoltageValue")?.GetComponent<Text>();
+        if (loadText == null)
+            loadText = GameObject.Find("LoadValue")?.GetComponent<Text>();
+        if (statusText == null)
+            statusText = GameObject.Find("StatusValue")?.GetComponent<Text>();
         
-        // Set default data
-        currentData.sicaklik = 50.0f;
-        currentData.yuk_seviyesi = 80.0f;
-        currentData.gerilim_primer = 155000f;
+        // MQTT bağlantısını başlat
+        ConnectToMQTT();
         
-        // Update UI
-        UpdateUI();
-        UpdateStatus("STARTING...", Color.yellow);
+        // Alarm panelini gizle
+        if (alarmPanel != null)
+            alarmPanel.SetActive(false);
         
-        // Start MQTT connection
-        StartMQTT();
+        // Son mesaj zamanını başlat
+        lastMessageTime = Time.time;
+        
+        Debug.Log("SimpleMQTTReceiver Başlatıldı - Saldırı simülasyonu için hazır");
     }
     
-    void StartMQTT()
+    void ConnectToMQTT()
     {
-        if (isRunning) return;
-        
-        isRunning = true;
-        mqttThread = new Thread(MQTTWorker);
-        mqttThread.IsBackground = true;
-        mqttThread.Start();
-        
-        Log("MQTT thread started");
-    }
-    
-    void MQTTWorker()
-    {
-        TcpClient client = null;
-        NetworkStream stream = null;
-        
         try
         {
-            Log("Connecting to MQTT broker...");
+            tcpClient = new TcpClient(brokerAddress, brokerPort);
+            stream = tcpClient.GetStream();
             
-            // Create TCP client
-            client = new TcpClient();
-            client.Connect(brokerIP, brokerPort);
-            stream = client.GetStream();
+            // MQTT CONNECT paketini gönder
+            SendConnectPacket();
             
-            Log("TCP connection established!");
+            // MQTT SUBSCRIBE paketini gönder
+            SendSubscribePacket();
             
-            // Send MQTT Connect with SAFE buffer
-            SendMQTTConnectSafe(stream, "UnityTrafoViewer");
-            Thread.Sleep(100);
-            
-            // Send Subscribe with SAFE buffer
-            SendMQTTSubscribeSafe(stream, topic);
-            Thread.Sleep(100);
-            
-            // Update status via main thread queue
-            EnqueueMainThreadAction(() => {
-                UpdateStatus("CONNECTED ✓", connectedColor);
-                Log("Successfully subscribed to: " + topic);
-            });
+            // Dinleme thread'ini başlat
+            mqttThread = new Thread(ListenForMessages);
+            mqttThread.Start();
             
             isConnected = true;
+            Debug.Log($"✅ MQTT Broker'a bağlandı: {brokerAddress}:{brokerPort}");
             
-            // Main listening loop
-            byte[] buffer = new byte[4096];
-            while (isRunning && isConnected && client.Connected)
-            {
-                try
-                {
-                    if (stream.DataAvailable)
-                    {
-                        int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                        if (bytesRead > 0)
-                        {
-                            string rawData = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                            ProcessIncomingData(rawData);
-                        }
-                    }
-                    Thread.Sleep(30);
-                }
-                catch (System.Exception e)
-                {
-                    LogWarning("Read error: " + e.Message);
-                    break;
-                }
-            }
+            if (statusText != null)
+                statusText.text = "Bağlı";
         }
-        catch (System.Exception e)
+        catch (Exception e)
         {
-            LogError("MQTT ERROR: " + e.Message);
-            EnqueueMainThreadAction(() => {
-                UpdateStatus("ERROR: " + e.Message, disconnectedColor);
-            });
-        }
-        finally
-        {
-            CleanupConnection(client, stream);
+            Debug.LogError($"❌ MQTT bağlantı hatası: {e.Message}");
+            if (statusText != null)
+                statusText.text = "Bağlantı Yok";
         }
     }
     
-    // FIXED: UTF-8 Buffer hatası çözüldü
-    void SendMQTTConnectSafe(NetworkStream stream, string clientId)
+    void SendConnectPacket()
     {
-        byte[] clientIdBytes = Encoding.UTF8.GetBytes(clientId);
+        // MQTT CONNECT paketi (basitleştirilmiş)
+        byte[] connectPacket = new byte[] {
+            0x10,       // CONNECT kontrol paketi
+            0x0E,       // Kalan uzunluk
+            0x00, 0x04, // Protokol adı uzunluğu
+            0x4D, 0x51, 0x54, 0x54, // "MQTT"
+            0x04,       // Protokol seviyesi
+            0x02,       // Bağlantı flag'leri (temiz oturum)
+            0x00, 0x3C, // Keep alive (60 saniye)
+            0x00, 0x0A, // Client ID uzunluğu
+            0x55, 0x6E, 0x69, 0x74, 0x79, 0x54, 0x72, 0x61, 0x66, 0x6F // "UnityTrafo"
+        };
         
-        // Use List<byte> for dynamic size
-        List<byte> packet = new List<byte>();
-        
-        // Fixed header
-        packet.Add(0x10); // CONNECT
-        
-        // Variable header
-        packet.Add(0x00); // Protocol name length MSB
-        packet.Add(0x04); // Protocol name length LSB
-        packet.Add((byte)'M');
-        packet.Add((byte)'Q');
-        packet.Add((byte)'T');
-        packet.Add((byte)'T');
-        packet.Add(0x04); // Protocol version
-        packet.Add(0x02); // Connect flags
-        packet.Add(0x00); // Keep alive MSB
-        packet.Add(0x3C); // Keep alive LSB (60)
-        
-        // Payload - Client ID
-        packet.Add(0x00); // Client ID length MSB
-        packet.Add((byte)clientIdBytes.Length); // Client ID length LSB
-        packet.AddRange(clientIdBytes);
-        
-        // Calculate remaining length
-        int remainingLength = packet.Count - 1;
-        packet.Insert(1, (byte)remainingLength);
-        
-        // Send packet
-        stream.Write(packet.ToArray(), 0, packet.Count);
+        stream.Write(connectPacket, 0, connectPacket.Length);
     }
     
-    // FIXED: UTF-8 Buffer hatası çözüldü
-    void SendMQTTSubscribeSafe(NetworkStream stream, string topic)
+    void SendSubscribePacket()
     {
+        // Topic'i byte array'e çevir
         byte[] topicBytes = Encoding.UTF8.GetBytes(topic);
         
-        List<byte> packet = new List<byte>();
+        // SUBSCRIBE paketi oluştur
+        List<byte> subscribePacket = new List<byte>();
+        subscribePacket.Add(0x82); // SUBSCRIBE kontrol paketi
         
-        // Fixed header
-        packet.Add(0x82); // SUBSCRIBE
+        // Kalan uzunluk (packet ID 2 byte + topic uzunluğu 2 byte + topic + QoS 1 byte)
+        int remainingLength = 2 + 2 + topicBytes.Length + 1;
+        subscribePacket.Add((byte)remainingLength);
         
-        // Variable header
-        packet.Add(0x00); // Packet ID MSB
-        packet.Add(0x01); // Packet ID LSB
+        // Packet ID (1)
+        subscribePacket.Add(0x00);
+        subscribePacket.Add(0x01);
+        
+        // Topic uzunluğu
+        subscribePacket.Add((byte)(topicBytes.Length >> 8));
+        subscribePacket.Add((byte)(topicBytes.Length & 0xFF));
         
         // Topic
-        packet.Add(0x00); // Topic length MSB
-        packet.Add((byte)topicBytes.Length); // Topic length LSB
-        packet.AddRange(topicBytes);
+        subscribePacket.AddRange(topicBytes);
         
-        // QoS
-        packet.Add(0x00); // QoS 0
+        // QoS (0)
+        subscribePacket.Add(0x00);
         
-        // Calculate remaining length
-        int remainingLength = packet.Count - 1;
-        packet.Insert(1, (byte)remainingLength);
-        
-        stream.Write(packet.ToArray(), 0, packet.Count);
+        stream.Write(subscribePacket.ToArray(), 0, subscribePacket.Count);
+        Debug.Log($"📡 Abone olundu: {topic}");
     }
     
-    void ProcessIncomingData(string rawData)
+    void ListenForMessages()
     {
-        // Extract JSON
-        int jsonStart = rawData.IndexOf('{');
-        int jsonEnd = rawData.LastIndexOf('}');
+        byte[] buffer = new byte[4096];
         
-        if (jsonStart >= 0 && jsonEnd > jsonStart)
+        while (isRunning && tcpClient != null && tcpClient.Connected)
         {
-            string jsonMessage = rawData.Substring(jsonStart, jsonEnd - jsonStart + 1);
-            messageQueue.Enqueue(jsonMessage);
-            messageCount++;
-            
-            if (debugMode)
+            try
             {
-                Log("RAW DATA #" + messageCount + ": " + jsonMessage);
+                if (stream.DataAvailable)
+                {
+                    int bytesRead = stream.Read(buffer, 0, buffer.Length);
+                    if (bytesRead > 0)
+                    {
+                        ProcessMQTTMessage(buffer, bytesRead);
+                    }
+                }
+                Thread.Sleep(10);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"MQTT dinleme hatası: {e.Message}");
+                break;
             }
         }
     }
     
-    void Update()
-    {
-        // Process main thread actions FIRST
-        while (!mainThreadQueue.IsEmpty)
-        {
-            if (mainThreadQueue.TryDequeue(out System.Action action))
-            {
-                try
-                {
-                    action.Invoke();
-                }
-                catch (System.Exception e)
-                {
-                    LogWarning("Main thread action error: " + e.Message);
-                }
-            }
-        }
-        
-        // Process MQTT messages
-        while (!messageQueue.IsEmpty)
-        {
-            if (messageQueue.TryDequeue(out string jsonMessage))
-            {
-                ProcessMessage(jsonMessage);
-            }
-        }
-        
-        // Test with T key
-        if (Input.GetKeyDown(KeyCode.T))
-        {
-            CreateTestData();
-        }
-        
-        // Quit with ESC
-        if (Input.GetKeyDown(KeyCode.Escape))
-        {
-            Log("Application quitting...");
-            Application.Quit();
-        }
-    }
-    
-    void ProcessMessage(string jsonMessage)
+    void ProcessMQTTMessage(byte[] data, int length)
     {
         try
         {
-            TrafoData newData = JsonUtility.FromJson<TrafoData>(jsonMessage);
-            currentData = newData;
+            // MQTT PUBLISH paketini parse et
+            string payload = "";
             
-            UpdateUI();
-            
-            // Log processed data
-            if (debugMode)
+            // Paket tipini kontrol et (PUBLISH = 0x30)
+            if ((data[0] & 0xF0) == 0x30)
             {
-                Log($"PROCESSED #{messageCount}: " +
-                    $"{currentData.sicaklik:F1}°C, " +
-                    $"{currentData.gerilim_primer / 1000:F1}kV, " +
-                    $"{currentData.yuk_seviyesi:F1}%");
+                // Topic ve payload'ı ayır
+                int index = 2; // Fixed header'dan sonra
+                
+                // Topic uzunluğunu oku
+                int topicLen = (data[index] << 8) | data[index + 1];
+                index += 2;
+                
+                // Topic'i atla
+                index += topicLen;
+                
+                // Payload'u oku
+                payload = Encoding.UTF8.GetString(data, index, length - index);
+                
+                // JSON'u parse et
+                ParseSensorData(payload);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Mesaj işleme hatası: {e.Message}");
+        }
+    }
+    
+    void ParseSensorData(string jsonData)
+    {
+        // DoS saldırısı kontrolü - veri akışı kesildiyse işleme
+        if (dataLossSimulated)
+        {
+            // Debug log'u çok fazla mesaj oluşturmasın diye sadece bazen logla
+            if (Time.frameCount % 60 == 0)
+                Debug.Log("[DoS] Veri akışı kesildi - UI güncellenmiyor");
+            return;
+        }
+        
+        try
+        {
+            // JSON'u parse et
+            var data = JsonUtility.FromJson<TrafoData>(jsonData);
+            
+            // Son mesaj zamanını güncelle
+            lastMessageTime = Time.time;
+            
+            // Saldırı altında değilsek normal verileri kaydet
+            if (!isUnderAttack)
+            {
+                lastTemperature = data.sicaklik;
+                lastVoltage = data.gerilim_primer / 1000f; // kV'a çevir
+                lastLoad = data.yuk_seviyesi;
             }
             
-            // Check alarms
-            CheckAlarms();
+            // UI'ı güncelle (ana thread'de çalıştır)
+            UnityMainThreadDispatcher.Instance().Enqueue(() => {
+                UpdateUI();
+            });
         }
-        catch (System.Exception e)
+        catch (Exception e)
         {
-            LogWarning("JSON parse error: " + e.Message);
+            Debug.LogError($"JSON parse hatası: {e.Message}\nVeri: {jsonData}");
         }
     }
     
     void UpdateUI()
     {
-        // Temperature
-        if (txtTemperature != null && txtTemperature.isActiveAndEnabled)
-        {
-            txtTemperature.text = "SICAKLIK: " + currentData.sicaklik.ToString("F1") + "°C";
-            
-            if (currentData.sicaklik > 80)
-                txtTemperature.color = dangerColor;
-            else if (currentData.sicaklik > 70)
-                txtTemperature.color = warningColor;
-            else
-                txtTemperature.color = normalColor;
-        }
+        // Sıcaklık güncelle (saldırı altındaysa sahte değeri göster)
+        float displayTemp = isUnderAttack && attackType == "temperature" ? attackValue : lastTemperature;
         
-        // Voltage
-        if (txtVoltage != null && txtVoltage.isActiveAndEnabled)
+        if (temperatureText != null)
         {
-            float kV = currentData.gerilim_primer / 1000f;
-            txtVoltage.text = "GERILIM: " + kV.ToString("F1") + " kV";
-            txtVoltage.color = normalColor;
-        }
-        
-        // Load
-        if (txtLoad != null && txtLoad.isActiveAndEnabled)
-        {
-            txtLoad.text = "YUK: " + currentData.yuk_seviyesi.ToString("F1") + "%";
-            
-            if (currentData.yuk_seviyesi > 90)
-                txtLoad.color = warningColor;
-            else
-                txtLoad.color = normalColor;
-        }
-    }
-    
-    void UpdateStatus(string status, Color color)
-    {
-        if (txtStatus != null && txtStatus.isActiveAndEnabled)
-        {
-            txtStatus.text = status;
-            txtStatus.color = color;
-        }
-    }
-    
-    void CheckAlarms()
-    {
-        if (currentData.sicaklik > 85)
-        {
-            LogWarning($"HIGH TEMPERATURE: {currentData.sicaklik:F1}°C");
-        }
-        
-        if (currentData.yuk_seviyesi > 95)
-        {
-            LogWarning($"HIGH LOAD: {currentData.yuk_seviyesi:F1}%");
-        }
-    }
-    
-    void EnqueueMainThreadAction(System.Action action)
-    {
-        mainThreadQueue.Enqueue(action);
-    }
-    
-    void CreateTestData()
-    {
-        currentData.sicaklik = UnityEngine.Random.Range(40f, 95f);
-        currentData.yuk_seviyesi = UnityEngine.Random.Range(60f, 100f);
-        currentData.gerilim_primer = UnityEngine.Random.Range(154000f, 160000f);
-        
-        UpdateUI();
-        
-        Log($"TEST DATA: " +
-            $"{currentData.sicaklik:F1}°C, " +
-            $"{currentData.gerilim_primer / 1000:F1}kV, " +
-            $"{currentData.yuk_seviyesi:F1}%");
-    }
-    
-    void CleanupConnection(TcpClient client, NetworkStream stream)
-    {
-        try
-        {
-            isConnected = false;
-            
-            if (stream != null)
+            temperatureText.text = $"{displayTemp:F1}°C";
+            if (displayTemp > 85)
             {
-                stream.Close();
-                stream.Dispose();
+                temperatureText.color = Color.red;
+                ShowAlarm("🔥 KRİTİK SICAKLIK!");
             }
-            
-            if (client != null)
+            else if (displayTemp > 70)
             {
-                client.Close();
-                client.Dispose();
+                temperatureText.color = Color.yellow;
+            }
+            else
+            {
+                temperatureText.color = Color.white;
             }
         }
-        catch (System.Exception e)
+        
+        // Gerilim güncelle (saldırı altındaysa sahte değeri göster)
+        float displayVoltage = isUnderAttack && attackType == "voltage" ? attackValue : lastVoltage;
+        
+        if (voltageText != null)
         {
-            LogWarning("Cleanup error: " + e.Message);
+            voltageText.text = $"{displayVoltage:F1} kV";
+            if (displayVoltage < 150 || displayVoltage > 165)
+            {
+                voltageText.color = Color.red;
+            }
+            else
+            {
+                voltageText.color = Color.white;
+            }
+        }
+        
+        // Yük güncelle (saldırı altındaysa sahte değeri göster)
+        float displayLoad = isUnderAttack && attackType == "load" ? attackValue : lastLoad;
+        
+        if (loadText != null)
+        {
+            loadText.text = $"%{displayLoad:F0}";
+            if (displayLoad > 100)
+            {
+                loadText.color = Color.red;
+            }
+            else if (displayLoad > 90)
+            {
+                loadText.color = Color.yellow;
+            }
+            else
+            {
+                loadText.color = Color.white;
+            }
+        }
+        
+        // Status text güncelle (saldırı durumu)
+        if (statusText != null)
+        {
+            if (isUnderAttack)
+            {
+                if (attackType == "dos")
+                    statusText.text = "⚠️ DoS SALDIRISI ALTINDA!";
+                else
+                    statusText.text = $"⚠️ FDI SALDIRISI ALTINDA! ({attackType})";
+                statusText.color = Color.red;
+            }
+            else
+            {
+                statusText.text = isConnected ? "✅ Normal Çalışıyor" : "❌ Bağlantı Yok";
+                statusText.color = isConnected ? Color.green : Color.red;
+            }
         }
     }
     
-    // Thread-safe logging methods
-    void Log(string message)
+    void ShowAlarm(string message)
     {
-        if (debugMode)
+        if (alarmPanel != null && !alarmPanel.activeSelf)
         {
-            UnityEngine.Debug.Log(message);
+            alarmPanel.SetActive(true);
+            Text alarmText = alarmPanel.GetComponentInChildren<Text>();
+            if (alarmText != null)
+                alarmText.text = message;
+            
+            StartCoroutine(HideAlarmAfterSeconds(5));
         }
     }
     
-    void LogWarning(string message)
+    IEnumerator HideAlarmAfterSeconds(float seconds)
     {
-        UnityEngine.Debug.LogWarning(message);
-    }
-    
-    void LogError(string message)
-    {
-        UnityEngine.Debug.LogError(message);
+        yield return new WaitForSeconds(seconds);
+        if (alarmPanel != null)
+            alarmPanel.SetActive(false);
     }
     
     void OnDestroy()
     {
         isRunning = false;
-        isConnected = false;
-        
         if (mqttThread != null && mqttThread.IsAlive)
-        {
             mqttThread.Join(1000);
+        
+        if (stream != null)
+            stream.Close();
+        if (tcpClient != null)
+            tcpClient.Close();
+    }
+    
+    // ===== TERMINALCONTROLLER İÇİN GEREKLİ METODLAR =====
+    
+    /// <summary>
+    /// Saldırı modunu ayarlar - TerminalController tarafından çağrılır
+    /// </summary>
+    public void SetAttackMode(bool active, string type, float value)
+    {
+        isUnderAttack = active;
+        attackType = type;
+        attackValue = value;
+        
+        if (!active)
+        {
+            // Saldırı bitti, normale dön
+            dataLossSimulated = false;
+            Debug.Log("[MQTT] ✅ Saldırı sona erdi, normale dönülüyor.");
+            
+            // Alarm panelini kapat
+            if (alarmPanel != null)
+                alarmPanel.SetActive(false);
+        }
+        else if (type == "dos")
+        {
+            // DoS saldırısı - veri akışını kes
+            dataLossSimulated = true;
+            Debug.Log("[MQTT] 🔴 DoS Saldırısı başladı! Veri akışı kesiliyor.");
+        }
+        else
+        {
+            // FDI saldırısı
+            dataLossSimulated = false;
+            string typeName = type == "temperature" ? "Sıcaklık" : (type == "voltage" ? "Gerilim" : "Yük");
+            Debug.Log($"[MQTT] 🔴 FDI Saldırısı başladı! {typeName} = {value}");
         }
         
-        Log("MQTT Receiver stopped");
+        // UI'ı hemen güncelle
+        UnityMainThreadDispatcher.Instance().Enqueue(() => {
+            UpdateUI();
+        });
+    }
+    
+    /// <summary>
+    /// Son alınan sıcaklık değerini döndürür
+    /// </summary>
+    public float GetLastTemperature()
+    {
+        if (isUnderAttack && attackType == "temperature")
+            return attackValue;
+        return lastTemperature;
+    }
+    
+    /// <summary>
+    /// Son alınan gerilim değerini döndürür
+    /// </summary>
+    public float GetLastVoltage()
+    {
+        if (isUnderAttack && attackType == "voltage")
+            return attackValue;
+        return lastVoltage;
+    }
+    
+    /// <summary>
+    /// Son alınan yük değerini döndürür
+    /// </summary>
+    public float GetLastLoad()
+    {
+        if (isUnderAttack && attackType == "load")
+            return attackValue;
+        return lastLoad;
+    }
+    
+    /// <summary>
+    /// Son mesajın alındığı zamanı döndürür (Time.time cinsinden)
+    /// </summary>
+    public float GetLastMessageTime()
+    {
+        return lastMessageTime;
+    }
+    
+    /// <summary>
+    /// MQTT bağlantı durumunu döndürür
+    /// </summary>
+    public bool IsConnected()
+    {
+        return isConnected && (Time.time - lastMessageTime) < 10f;
+    }
+    
+    /// <summary>
+    /// Saldırı altında mı değil mi döndürür
+    /// </summary>
+    public bool IsUnderAttack()
+    {
+        return isUnderAttack;
+    }
+    
+    /// <summary>
+    /// Aktif saldırı tipini döndürür
+    /// </summary>
+    public string GetAttackType()
+    {
+        return attackType;
+    }
+}
+
+// JSON veri sınıfı (veri.py'deki yapıyla eşleşmeli)
+[System.Serializable]
+public class TrafoData
+{
+    public float sicaklik;
+    public float yag_sicaklik;
+    public float gerilim_primer;
+    public float gerilim_sekonder;
+    public float akim_primer;
+    public float akim_sekonder;
+    public float yuk_seviyesi;
+}
+
+// Ana thread'de çalıştırmak için yardımcı sınıf
+public class UnityMainThreadDispatcher : MonoBehaviour
+{
+    private static UnityMainThreadDispatcher _instance;
+    private Queue<Action> _actions = new Queue<Action>();
+    
+    public static UnityMainThreadDispatcher Instance()
+    {
+        if (_instance == null)
+        {
+            GameObject go = new GameObject("MainThreadDispatcher");
+            _instance = go.AddComponent<UnityMainThreadDispatcher>();
+            DontDestroyOnLoad(go);
+        }
+        return _instance;
+    }
+    
+    void Awake()
+    {
+        if (_instance == null)
+        {
+            _instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+    }
+    
+    public void Enqueue(Action action)
+    {
+        lock (_actions)
+        {
+            _actions.Enqueue(action);
+        }
+    }
+    
+    void Update()
+    {
+        lock (_actions)
+        {
+            while (_actions.Count > 0)
+            {
+                _actions.Dequeue()?.Invoke();
+            }
+        }
     }
 }
