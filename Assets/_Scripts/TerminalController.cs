@@ -17,13 +17,20 @@ public class TerminalController : MonoBehaviour
     public SimpleMQTTReceiver mqttReceiver;
     
     private List<string> history = new List<string>();
+    private readonly List<string> outputLines = new List<string>();
+    private const int MaxVisibleOutputLines = 34;
     private int historyIndex = 0;
     private bool isAttackRunning = false;
     private ScrollRect scrollRect;
     
     // Kullanıcının scroll pozisyonunu korumak için
     private bool autoScroll = true;  // Otomatik scroll aktif mi?
-    private float lastScrollPosition = 1f;  // Son scroll pozisyonu
+    
+    
+    private bool liveTelemetry = true;
+    private int lastDisplayedTelemetryCounter = -1;
+private int lastSubmitFrame = -1;
+private float lastScrollPosition = 1f;  // Son scroll pozisyonu
     
     void Start()
     {
@@ -40,103 +47,106 @@ public class TerminalController : MonoBehaviour
         }
     }
     
-    void FindElements()
+void FindElements()
     {
         if (OutputText == null)
         {
             GameObject obj = GameObject.Find("OutputText");
             if (obj != null) OutputText = obj.GetComponent<TMP_Text>();
         }
-        
+
         if (InputField == null)
-        {
-            GameObject obj = GameObject.Find("Text Area");
-            if (obj != null) InputField = obj.GetComponent<TMP_InputField>();
-        }
-        
+            InputField = GetComponentInChildren<TMP_InputField>(true);
+
         if (StatusBar == null)
             StatusBar = GameObject.Find("StatusBar")?.GetComponent<TMP_Text>();
-        
+
         if (WarningPanel == null)
             WarningPanel = GameObject.Find("WarningPanel");
-        
+
         if (SendButton == null)
             SendButton = GameObject.Find("SendButton")?.GetComponent<Button>();
-        
+
         if (mqttReceiver == null)
             mqttReceiver = FindFirstObjectByType<SimpleMQTTReceiver>();
-        
+
         if (OutputText != null)
             scrollRect = OutputText.GetComponentInParent<ScrollRect>();
     }
     
     // Kullanıcı scroll yaptığında çağrılır
-    void OnScrollChanged(Vector2 position)
+void OnScrollChanged(Vector2 position)
     {
-        // Kullanıcı manuel olarak yukarı scroll yaptıysa otomatik scroll'u kapat
-        if (position.y < 0.99f)
-        {
-            autoScroll = false;
-        }
-        // Kullanıcı en alta scroll yaptıysa otomatik scroll'u tekrar aç
-        else if (position.y >= 0.99f)
-        {
+        // ScrollRect'te alt konum 0'dır. Kullanici yukari cikarsa otomatik takip kapanir.
+        if (position.y <= 0.02f)
             autoScroll = true;
-        }
-        
+        else if (position.y > 0.08f)
+            autoScroll = false;
+
         lastScrollPosition = position.y;
     }
     
-    void SetupInput()
+void SetupInput()
     {
-        if (InputField != null)
+        if (InputField == null) return;
+
+        InputField.lineType = TMP_InputField.LineType.SingleLine;
+        InputField.onSubmit.RemoveAllListeners();
+        InputField.onEndEdit.RemoveAllListeners();
+        InputField.onSubmit.AddListener(_ => SubmitCurrentInput());
+        InputField.onEndEdit.AddListener(_ =>
         {
-            InputField.onEndEdit.AddListener(OnCommand);
-            InputField.Select();
-        }
+            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+                SubmitCurrentInput();
+        });
+        InputField.Select();
+        InputField.ActivateInputField();
     }
     
-    void SetupButton()
+void SetupButton()
     {
-        if (SendButton != null)
-        {
-            SendButton.onClick.AddListener(() => {
-                if (InputField != null) OnCommand(InputField.text);
-            });
-        }
+        if (SendButton == null) return;
+
+        SendButton.onClick.RemoveAllListeners();
+        SendButton.onClick.AddListener(SubmitCurrentInput);
     }
     
-    void InitializeTerminal()
+void InitializeTerminal()
     {
-        ClearTerminal();
-        WriteLine("╔════════════════════════════════════════════════╗");
-        WriteLine("║     TRAFO SİBER GÜVENLİK SİMÜLATÖRÜ v1.0     ║");
-        WriteLine("╚════════════════════════════════════════════════╝");
+        if (OutputText != null)
+            OutputText.text = "";
+        outputLines.Clear();
+
+        WriteLine("<color=#0FD19E><b>TRAFO MERKEZI SCADA TERMINALI</b></color>");
+        WriteLine("<color=#728087>operator@scada-room  |  egitim/simulasyon  |  oturum: local</color>");
+        WriteLine("================================================================");
+        WriteLine("Baglanti: MQTT localhost:1883  |  Alan: TM1 / Trafo sensorleri");
+        WriteLine("Rol     : Operator konsolu, siber olay simülasyonu ve telemetri izleme");
+        WriteLine("----------------------------------------------------------------");
+        WriteLine("Komut listesi icin <color=#0FD19E>help</color> yazin.");
+        WriteLine("Onerilen akis: <color=#B9FBCB>status</color> -> <color=#B9FBCB>scan</color> -> <color=#B9FBCB>attack fdi temp</color> -> <color=#B9FBCB>stop</color>");
         WriteLine("");
-        WriteLine("> Terminal hazır. 'help' yazın.");
-        WriteLine("");
-        
+
         if (WarningPanel != null)
             WarningPanel.SetActive(false);
     }
     
-    void OnCommand(string command)
+void OnCommand(string command)
     {
-        if (string.IsNullOrEmpty(command)) return;
-        
-        WriteLine("");
-        WriteLine($">>> {command}");
-        
-        ProcessCommand(command.ToLower().Trim());
-        
-        if (InputField != null)
+        if (string.IsNullOrWhiteSpace(command))
         {
-            InputField.text = "";
-            InputField.Select();
+            FocusInput();
+            return;
         }
-        
+
+        WriteLine("");
+        WriteLine($"scada> {command}");
+
+        ProcessCommand(command.ToLower().Trim());
+
         history.Add(command);
         historyIndex = history.Count;
+        FocusInput();
     }
     
     void ProcessCommand(string cmd)
@@ -147,34 +157,47 @@ public class TerminalController : MonoBehaviour
         {
             case "help":
                 WriteLine("");
-                WriteLine("  help     - Bu menü");
-                WriteLine("  status   - Sistem durumu");
-                WriteLine("  clear    - Temizle");
-                WriteLine("  attack fdi temp  - FDI saldırısı");
-                WriteLine("  attack dos medium - DoS saldırısı");
-                WriteLine("  stop     - Saldırıyı durdur");
+                WriteLine("<color=#0FD19E>KOMUTLAR</color>");
+                WriteLine("  help               Tum komutlari listeler");
+                WriteLine("  status             MQTT baglanti ve trafo ozetini gosterir");
+                WriteLine("  data               veri.py tarafindan gelen son telemetri paketini gosterir");
+                WriteLine("  telemetry          data komutunun aynisi");
+                WriteLine("  live on            Gelen Python verilerini terminale otomatik yazdirir");
+                WriteLine("  live off           Otomatik telemetri yazimini kapatir");
+                WriteLine("  scan               SCADA ag yuzeyi ve risk ozetini listeler");
+                WriteLine("  attack fdi temp    Sicaklik sensorunde FDI senaryosu baslatir");
+                WriteLine("  attack dos medium  MQTT veri akisinda orta seviye DoS senaryosu baslatir");
+                WriteLine("  stop               Aktif senaryoyu durdurur");
+                WriteLine("  clear              Terminal ciktisini temizler");
                 WriteLine("");
                 break;
                 
-            case "status":
-                WriteLine("");
-                WriteLine("┌────────────────────────────────────────┐");
-                WriteLine("│ SİSTEM DURUMU                         │");
-                WriteLine("├────────────────────────────────────────┤");
-                if (mqttReceiver != null)
+            
+
+            case "data":
+            case "telemetry":
+                PrintTelemetrySnapshot();
+                break;
+
+            case "live":
+                if (parts.Length > 1 && parts[1] == "off")
                 {
-                    WriteLine($"│ MQTT   : {(mqttReceiver.IsConnected() ? "BAĞLI ✓" : "BAĞLI DEĞİL ✗")}");
-                    WriteLine($"│ Sıcaklık: {mqttReceiver.GetLastTemperature():F0} °C");
-                    WriteLine($"│ Gerilim : {mqttReceiver.GetLastVoltage():F0} kV");
-                    WriteLine($"│ Yük     : %{mqttReceiver.GetLastLoad():F0}");
+                    liveTelemetry = false;
+                    WriteLine("> Canli telemetri yazimi kapatildi.");
                 }
                 else
                 {
-                    WriteLine("│ MQTT   : BULUNAMADI !");
+                    liveTelemetry = true;
+                    WriteLine("> Canli telemetri yazimi acildi.");
+                    PrintTelemetrySnapshot();
                 }
-                WriteLine($"│ Saldırı : {(isAttackRunning ? "AKTİF" : "YOK")}");
-                WriteLine("└────────────────────────────────────────┘");
-                WriteLine("");
+                break;
+case "status":
+                PrintStatus();
+                break;
+
+            case "scan":
+                PrintScan();
                 break;
                 
             case "clear":
@@ -208,28 +231,124 @@ public class TerminalController : MonoBehaviour
         
         UpdateStatusBar();
     }
+
+void PrintStatus()
+    {
+        WriteLine("");
+        WriteLine("<color=#0FD19E><b>SISTEM DURUMU</b></color>");
+        WriteLine("----------------------------------------------------------------");
+        if (mqttReceiver != null)
+        {
+            WriteLine($"MQTT broker      : {(mqttReceiver.IsConnected() ? "<color=#8EF58C>BAGLI</color>" : "<color=#FF6961>BAGLI DEGIL / VERI BEKLENIYOR</color>")}");
+            WriteLine($"Topic            : TM1/Trafo/sensor");
+            WriteLine($"Paket sayisi     : {mqttReceiver.GetMessageCounter()}");
+            WriteLine($"Trafo sicakligi  : {mqttReceiver.GetLastTemperature():F1} C");
+            WriteLine($"Yag sicakligi    : {mqttReceiver.GetLastOilTemperature():F1} C");
+            WriteLine($"Primer gerilim   : {mqttReceiver.GetLastVoltage():F1} kV");
+            WriteLine($"Sekonder gerilim : {mqttReceiver.GetLastSecondaryVoltage():F1} kV");
+            WriteLine($"Primer akim      : {mqttReceiver.GetLastPrimaryCurrent():F1} A");
+            WriteLine($"Sekonder akim    : {mqttReceiver.GetLastSecondaryCurrent():F1} A");
+            WriteLine($"Yuklenme         : %{mqttReceiver.GetLastLoad():F1}");
+        }
+        else
+        {
+            WriteLine("MQTT broker      : <color=#FFB84D>SimpleMQTTReceiver bulunamadi</color>");
+            WriteLine("Telemetri        : veri.py calissa bile Unity alicisi yok.");
+        }
+        WriteLine($"Siber senaryo    : {(isAttackRunning ? "<color=#FF6961>AKTIF</color>" : "<color=#8EF58C>NORMAL</color>")}");
+        WriteLine($"Canli yazim      : {(liveTelemetry ? "ACIK" : "KAPALI")}");
+        WriteLine("");
+    }
+
+void PrintTelemetrySnapshot()
+    {
+        WriteLine("");
+        WriteLine("<color=#0FD19E><b>PYTHON TELEMETRI PAKETI</b></color>");
+        WriteLine("----------------------------------------------------------------");
+        if (mqttReceiver == null)
+        {
+            WriteLine("SimpleMQTTReceiver bulunamadi. MQTT_Manager objesini kontrol edin.");
+            WriteLine("");
+            return;
+        }
+
+        if (mqttReceiver.GetMessageCounter() <= 0)
+        {
+            WriteLine("veri.py tarafindan henuz paket alinmadi.");
+            WriteLine("Beklenen kaynak: Assets/_Scripts/veri.py -> TM1/Trafo/sensor");
+            WriteLine("Mosquitto ve veri.py calistiginda bu alan guncellenecek.");
+            WriteLine("");
+            return;
+        }
+
+        WriteLine($"Paket #{mqttReceiver.GetMessageCounter()} | sicaklik={mqttReceiver.GetLastTemperature():F1} C | yag={mqttReceiver.GetLastOilTemperature():F1} C | gerilim={mqttReceiver.GetLastVoltage():F1} kV | yuk=%{mqttReceiver.GetLastLoad():F1}");
+        WriteLine($"Akim primer={mqttReceiver.GetLastPrimaryCurrent():F1} A | akim sekonder={mqttReceiver.GetLastSecondaryCurrent():F1} A | sekonder gerilim={mqttReceiver.GetLastSecondaryVoltage():F1} kV");
+        string raw = mqttReceiver.GetLastRawJson();
+        if (!string.IsNullOrEmpty(raw))
+            WriteLine($"JSON: {raw}");
+        WriteLine("");
+    }
+
+void PrintLiveTelemetryIfNew()
+    {
+        if (!liveTelemetry || mqttReceiver == null) return;
+
+        int counter = mqttReceiver.GetMessageCounter();
+        if (counter <= 0 || counter == lastDisplayedTelemetryCounter) return;
+
+        lastDisplayedTelemetryCounter = counter;
+        WriteLine($"<color=#728087>[veri.py #{counter}]</color> sicaklik={mqttReceiver.GetLastTemperature():F1} C | yag={mqttReceiver.GetLastOilTemperature():F1} C | gerilim={mqttReceiver.GetLastVoltage():F1} kV | yuk=%{mqttReceiver.GetLastLoad():F1}", true);
+    }
+
+
+void PrintScan()
+    {
+        WriteLine("");
+        WriteLine("<color=#0FD19E><b>SCADA AG TARAMASI</b></color>");
+        WriteLine("----------------------------------------------------------------");
+        WriteLine("IP          VARLIK          SERVIS          DURUM");
+        WriteLine("10.10.0.11  HMI-01          502/tcp         Modbus izleniyor");
+        WriteLine("10.10.0.21  RTU-TRAFO       1883/tcp        MQTT telemetri aktif");
+        WriteLine("10.10.0.31  HISTORIAN       8086/tcp        Zaman serisi kaydi aktif");
+        WriteLine("10.10.0.41  ENG-WS          22/tcp          Bakim istasyonu pasif");
+        WriteLine("----------------------------------------------------------------");
+        WriteLine("Risk ozeti  : Sensor verisi butunlugu ve MQTT akis surekliligi izlenmeli.");
+        WriteLine("Oneri       : FDI ve DoS senaryolarini sirayla calistirip panel etkisini gozlemleyin.");
+        WriteLine("");
+    }
     
-    void StartFDIAttack()
+void StartFDIAttack()
     {
         if (isAttackRunning)
         {
-            WriteLine("> Zaten aktif saldırı var! 'stop' ile durdurun.");
+            WriteLine("> Zaten aktif senaryo var. Durdurmak icin stop yazin.");
+            FocusInput();
             return;
         }
-        
+
         WriteLine("");
-        WriteLine("🔴 FDI SALDIRISI BAŞLATILDI!");
-        WriteLine("   Hedef: Sıcaklık Sensörü");
-        WriteLine("   Etki: Veri manipülasyonu");
-        WriteLine("");
-        
+        WriteLine("<color=#FF6961><b>FDI SENARYOSU BASLATILDI</b></color>");
+        WriteLine("Hedef : Sicaklik sensoru");
+        WriteLine("Etki  : MQTT uzerinden sahte yuksek sicaklik degeri enjekte edilir");
+        WriteLine("Deger : 95 C");
+        WriteLine("Sure  : 10 saniye");
+
         isAttackRunning = true;
-        
+
         if (mqttReceiver != null)
+        {
             mqttReceiver.SetAttackMode(true, "temperature", 95f);
-        
-        ShowWarning("⚠️ FDI SALDIRISI! Sıcaklık verileri manipüle ediliyor!");
+            WriteLine("Durum : MQTT alicisi saldiri moduna alindi.");
+        }
+        else
+        {
+            WriteLine("<color=#FFB84D>Uyari : SimpleMQTTReceiver bulunamadi, sadece terminal senaryosu calisiyor.</color>");
+        }
+
+        WriteLine("");
+        ShowWarning("FDI SENARYOSU AKTIF: sicaklik verisi manipule ediliyor");
         StartCoroutine(AutoStop(10));
+        FocusInput();
     }
     
     void StartDoSAttack()
@@ -241,9 +360,10 @@ public class TerminalController : MonoBehaviour
         }
         
         WriteLine("");
-        WriteLine("🔴 DoS SALDIRISI BAŞLATILDI!");
-        WriteLine("   Şiddet: MEDIUM");
-        WriteLine("   Etki: Veri akışı kesiliyor");
+        WriteLine("<color=#FF6961>DoS SENARYOSU BASLATILDI</color>");
+        WriteLine("Siddet: MEDIUM");
+        WriteLine("Etki  : MQTT telemetri akisi gecici olarak kesilir");
+        WriteLine("Sure  : 10 saniye");
         WriteLine("");
         
         isAttackRunning = true;
@@ -251,31 +371,33 @@ public class TerminalController : MonoBehaviour
         if (mqttReceiver != null)
             mqttReceiver.SetAttackMode(true, "dos", 0);
         
-        ShowWarning("⚠️ DoS SALDIRISI! Veri akışı kesildi!");
+        ShowWarning("DoS SENARYOSU AKTIF: veri akisi kesiliyor");
         StartCoroutine(AutoStop(10));
     }
     
-    void StopAttack()
+void StopAttack()
     {
         if (!isAttackRunning)
         {
-            WriteLine("> Aktif saldırı yok.");
+            WriteLine("> Aktif senaryo yok.");
+            FocusInput();
             return;
         }
-        
+
         WriteLine("");
-        WriteLine("🛑 SALDIRI DURDURULDU");
+        WriteLine("<color=#8EF58C><b>SENARYO DURDURULDU</b></color>");
         WriteLine("");
-        
+
         if (mqttReceiver != null)
             mqttReceiver.SetAttackMode(false, "", 0);
-        
+
         if (WarningPanel != null)
             WarningPanel.SetActive(false);
-        
+
         isAttackRunning = false;
         UpdateStatusBar();
-        WriteLine("> Sistem normale döndü.");
+        WriteLine("> Sistem normale dondu.");
+        FocusInput();
     }
     
     IEnumerator AutoStop(float seconds)
@@ -303,22 +425,28 @@ public class TerminalController : MonoBehaviour
             WarningPanel.SetActive(false);
     }
     
-    void UpdateStatusBar()
+void UpdateStatusBar()
     {
-        if (StatusBar != null && mqttReceiver != null)
+        if (StatusBar == null) return;
+
+        if (mqttReceiver == null)
         {
-            float temp = mqttReceiver.GetLastTemperature();
-            float volt = mqttReceiver.GetLastVoltage();
-            float load = mqttReceiver.GetLastLoad();
-            
-            string text = $"🌡️ {temp:F0}°C  ⚡ {volt:F0}kV  📊 %{load:F0}";
-            if (isAttackRunning) text = "⚠️ SALDIRI AKTİF ⚠️  |  " + text;
-            
-            StatusBar.text = text;
+            StatusBar.text = "MQTT ALICI YOK | veri.py beklenemiyor";
+            return;
         }
+
+        float temp = mqttReceiver.GetLastTemperature();
+        float volt = mqttReceiver.GetLastVoltage();
+        float load = mqttReceiver.GetLastLoad();
+
+        string text = $"PY #{mqttReceiver.GetMessageCounter()} | TEMP {temp:F1} C | VOLT {volt:F1} kV | LOAD %{load:F1}";
+        if (isAttackRunning) text = "SENARYO AKTIF | " + text;
+        if (!mqttReceiver.IsConnected()) text += " | MQTT VERI BEKLENIYOR";
+
+        StatusBar.text = text;
     }
     
-    IEnumerator UpdateStatus()
+IEnumerator UpdateStatus()
     {
         while (true)
         {
@@ -327,21 +455,32 @@ public class TerminalController : MonoBehaviour
         }
     }
     
-    void WriteLine(string text)
+void WriteLine(string text)
+    {
+        WriteLine(text, false);
+    }
+
+    void WriteLine(string text, bool forceScroll)
     {
         if (OutputText != null)
         {
-            OutputText.text += text + "\n";
-            
-            // SADECE otomatik scroll aktifse en alta kaydır
-            if (autoScroll)
+            outputLines.Add(text);
+            while (outputLines.Count > MaxVisibleOutputLines)
+                outputLines.RemoveAt(0);
+
+            OutputText.text = string.Join("\n", outputLines);
+
+            if (forceScroll)
+            {
+                autoScroll = true;
+                ScrollToBottom();
+            }
+            else if (autoScroll)
             {
                 ScrollToBottom();
             }
-            // Değilse, kullanıcının scroll pozisyonunu koru
             else if (scrollRect != null)
             {
-                // Scroll pozisyonunu geri yükle
                 StartCoroutine(RestoreScrollPosition());
             }
         }
@@ -349,6 +488,24 @@ public class TerminalController : MonoBehaviour
         {
             Debug.Log(text);
         }
+    }
+
+    void UpdateOutputContentHeight()
+    {
+        if (OutputText == null || scrollRect == null || scrollRect.content == null)
+            return;
+
+        OutputText.ForceMeshUpdate();
+        float viewportHeight = scrollRect.viewport != null ? scrollRect.viewport.rect.height : 0f;
+        float preferredHeight = OutputText.preferredHeight + 24f;
+        float targetHeight = Mathf.Max(viewportHeight, preferredHeight);
+        scrollRect.content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, targetHeight);
+
+        RectTransform textRect = OutputText.rectTransform;
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
     }
     
     IEnumerator RestoreScrollPosition()
@@ -374,28 +531,34 @@ public class TerminalController : MonoBehaviour
         if (scrollRect != null)
         {
             Canvas.ForceUpdateCanvases();
-            if (scrollRect.content != null)
-                LayoutRebuilder.ForceRebuildLayoutImmediate(scrollRect.content);
+            UpdateOutputContentHeight();
             scrollRect.verticalNormalizedPosition = 0f;
             autoScroll = true;
             lastScrollPosition = 0f;
         }
     }
     
-    void ClearTerminal()
+void ClearTerminal()
     {
+        outputLines.Clear();
         if (OutputText != null)
             OutputText.text = "";
-        WriteLine("> Terminal temizlendi.");
-        
-        // Temizleme sonrası en alta scroll yap
+        WriteLine("Terminal temizlendi. Komut listesi icin help yazin.");
+
         autoScroll = true;
         ScrollToBottom();
     }
     
-    void Update()
+void Update()
     {
-        if (InputField != null && InputField.isFocused)
+        PrintLiveTelemetryIfNew();
+
+        if (InputField == null) return;
+
+        if (InputField.isFocused && (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)))
+            SubmitCurrentInput();
+
+        if (InputField.isFocused)
         {
             if (Input.GetKeyDown(KeyCode.UpArrow) && history.Count > 0)
             {
@@ -410,5 +573,25 @@ public class TerminalController : MonoBehaviour
                 InputField.caretPosition = InputField.text.Length;
             }
         }
+    }
+
+
+void SubmitCurrentInput()
+    {
+        if (InputField == null) return;
+        if (lastSubmitFrame == Time.frameCount) return;
+        lastSubmitFrame = Time.frameCount;
+
+        string command = InputField.text;
+        InputField.text = "";
+        OnCommand(command);
+    }
+
+    void FocusInput()
+    {
+        if (InputField == null) return;
+        InputField.Select();
+        InputField.ActivateInputField();
+        InputField.caretPosition = InputField.text.Length;
     }
 }

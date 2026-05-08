@@ -29,11 +29,20 @@ public class SimpleMQTTReceiver : MonoBehaviour
     private bool isConnected = false;
     private bool isRunning = true;
     
-    // Son alınan veriler
-    private float lastTemperature = 72f;   // Başlangıç değeri
-    private float lastVoltage = 154f;       // Başlangıç değeri
-    private float lastLoad = 80f;           // Başlangıç değeri
-    private float lastMessageTime = 0;      // Time.time için float
+    // Son alinan veriler
+    private float lastTemperature = 72f;
+    private float lastOilTemperature = 60f;
+    private float lastVoltage = 154f;
+    private float lastSecondaryVoltage = 34.5f;
+    private float lastPrimaryCurrent = 250f;
+    private float lastSecondaryCurrent = 1200f;
+    private float lastLoad = 80f;
+    private float lastMessageTime = 0;
+    private int messageCounter = 0;
+    
+    private readonly Queue<string> pendingPayloads = new Queue<string>();
+    private readonly object pendingPayloadLock = new object();
+private string lastRawJson = "";
     
     // ===== SALDIRI YÖNETİMİ İÇİN YENİ DEĞİŞKENLER =====
     private bool isUnderAttack = false;
@@ -97,54 +106,86 @@ public class SimpleMQTTReceiver : MonoBehaviour
         }
     }
     
-    void SendConnectPacket()
+void SendConnectPacket()
     {
-        // MQTT CONNECT paketi (basitleştirilmiş)
-        byte[] connectPacket = new byte[] {
-            0x10,       // CONNECT kontrol paketi
-            0x0E,       // Kalan uzunluk
-            0x00, 0x04, // Protokol adı uzunluğu
-            0x4D, 0x51, 0x54, 0x54, // "MQTT"
-            0x04,       // Protokol seviyesi
-            0x02,       // Bağlantı flag'leri (temiz oturum)
-            0x00, 0x3C, // Keep alive (60 saniye)
-            0x00, 0x0A, // Client ID uzunluğu
-            0x55, 0x6E, 0x69, 0x74, 0x79, 0x54, 0x72, 0x61, 0x66, 0x6F // "UnityTrafo"
-        };
-        
-        stream.Write(connectPacket, 0, connectPacket.Length);
+        byte[] protocolName = Encoding.ASCII.GetBytes("MQTT");
+        byte[] clientId = Encoding.ASCII.GetBytes("UnityTrafo");
+
+        List<byte> body = new List<byte>();
+        body.Add(0x00);
+        body.Add((byte)protocolName.Length);
+        body.AddRange(protocolName);
+        body.Add(0x04);
+        body.Add(0x02);
+        body.Add(0x00);
+        body.Add(0x3C);
+        body.Add(0x00);
+        body.Add((byte)clientId.Length);
+        body.AddRange(clientId);
+
+        List<byte> packet = new List<byte>();
+        packet.Add(0x10);
+        packet.AddRange(EncodeRemainingLength(body.Count));
+        packet.AddRange(body);
+
+        stream.Write(packet.ToArray(), 0, packet.Count);
     }
     
-    void SendSubscribePacket()
+void SendSubscribePacket()
     {
-        // Topic'i byte array'e çevir
         byte[] topicBytes = Encoding.UTF8.GetBytes(topic);
-        
-        // SUBSCRIBE paketi oluştur
-        List<byte> subscribePacket = new List<byte>();
-        subscribePacket.Add(0x82); // SUBSCRIBE kontrol paketi
-        
-        // Kalan uzunluk (packet ID 2 byte + topic uzunluğu 2 byte + topic + QoS 1 byte)
-        int remainingLength = 2 + 2 + topicBytes.Length + 1;
-        subscribePacket.Add((byte)remainingLength);
-        
-        // Packet ID (1)
-        subscribePacket.Add(0x00);
-        subscribePacket.Add(0x01);
-        
-        // Topic uzunluğu
-        subscribePacket.Add((byte)(topicBytes.Length >> 8));
-        subscribePacket.Add((byte)(topicBytes.Length & 0xFF));
-        
-        // Topic
-        subscribePacket.AddRange(topicBytes);
-        
-        // QoS (0)
-        subscribePacket.Add(0x00);
-        
-        stream.Write(subscribePacket.ToArray(), 0, subscribePacket.Count);
-        Debug.Log($"📡 Abone olundu: {topic}");
+
+        List<byte> body = new List<byte>();
+        body.Add(0x00);
+        body.Add(0x01);
+        body.Add((byte)(topicBytes.Length >> 8));
+        body.Add((byte)(topicBytes.Length & 0xFF));
+        body.AddRange(topicBytes);
+        body.Add(0x00);
+
+        List<byte> packet = new List<byte>();
+        packet.Add(0x82);
+        packet.AddRange(EncodeRemainingLength(body.Count));
+        packet.AddRange(body);
+
+        stream.Write(packet.ToArray(), 0, packet.Count);
+        Debug.Log($"[MQTT] Abone olundu: {topic}");
     }
+
+List<byte> EncodeRemainingLength(int length)
+    {
+        List<byte> encoded = new List<byte>();
+        do
+        {
+            byte digit = (byte)(length % 128);
+            length /= 128;
+            if (length > 0)
+                digit |= 128;
+            encoded.Add(digit);
+        }
+        while (length > 0);
+        return encoded;
+    }
+
+    int DecodeRemainingLength(byte[] data, int maxLength, out int bytesUsed)
+    {
+        int multiplier = 1;
+        int value = 0;
+        bytesUsed = 0;
+
+        for (int i = 1; i < maxLength; i++)
+        {
+            byte encodedByte = data[i];
+            value += (encodedByte & 127) * multiplier;
+            bytesUsed++;
+            if ((encodedByte & 128) == 0)
+                break;
+            multiplier *= 128;
+        }
+
+        return value;
+    }
+
     
     void ListenForMessages()
     {
@@ -172,74 +213,95 @@ public class SimpleMQTTReceiver : MonoBehaviour
         }
     }
     
-    void ProcessMQTTMessage(byte[] data, int length)
+void ProcessMQTTMessage(byte[] data, int length)
     {
         try
         {
-            // MQTT PUBLISH paketini parse et
-            string payload = "";
-            
-            // Paket tipini kontrol et (PUBLISH = 0x30)
+            if (length < 2) return;
+
             if ((data[0] & 0xF0) == 0x30)
             {
-                // Topic ve payload'ı ayır
-                int index = 2; // Fixed header'dan sonra
-                
-                // Topic uzunluğunu oku
+                int remainingLengthBytes;
+                DecodeRemainingLength(data, length, out remainingLengthBytes);
+                int index = 1 + remainingLengthBytes;
+
+                if (index + 2 > length) return;
+
                 int topicLen = (data[index] << 8) | data[index + 1];
-                index += 2;
-                
-                // Topic'i atla
-                index += topicLen;
-                
-                // Payload'u oku
-                payload = Encoding.UTF8.GetString(data, index, length - index);
-                
-                // JSON'u parse et
-                ParseSensorData(payload);
+                index += 2 + topicLen;
+
+                if (index >= length) return;
+
+                string payload = Encoding.UTF8.GetString(data, index, length - index);
+                EnqueuePayload(payload);
             }
         }
         catch (Exception e)
         {
-            Debug.LogError($"Mesaj işleme hatası: {e.Message}");
+            Debug.LogError($"Mesaj isleme hatasi: {e.Message}");
         }
     }
-    
-    void ParseSensorData(string jsonData)
+
+void EnqueuePayload(string payload)
     {
-        // DoS saldırısı kontrolü - veri akışı kesildiyse işleme
+        lock (pendingPayloadLock)
+        {
+            pendingPayloads.Enqueue(payload);
+        }
+    }
+
+    void Update()
+    {
+        while (true)
+        {
+            string payload = null;
+            lock (pendingPayloadLock)
+            {
+                if (pendingPayloads.Count > 0)
+                    payload = pendingPayloads.Dequeue();
+            }
+
+            if (payload == null)
+                break;
+
+            ParseSensorData(payload);
+        }
+    }
+
+    
+void ParseSensorData(string jsonData)
+    {
         if (dataLossSimulated)
         {
-            // Debug log'u çok fazla mesaj oluşturmasın diye sadece bazen logla
             if (Time.frameCount % 60 == 0)
-                Debug.Log("[DoS] Veri akışı kesildi - UI güncellenmiyor");
+                Debug.Log("[DoS] Veri akisi kesildi - UI guncellenmiyor");
             return;
         }
-        
+
         try
         {
-            // JSON'u parse et
             var data = JsonUtility.FromJson<TrafoData>(jsonData);
-            
-            // Son mesaj zamanını güncelle
+
             lastMessageTime = Time.time;
-            
-            // Saldırı altında değilsek normal verileri kaydet
+            lastRawJson = jsonData;
+            messageCounter++;
+
             if (!isUnderAttack)
             {
                 lastTemperature = data.sicaklik;
-                lastVoltage = data.gerilim_primer / 1000f; // kV'a çevir
+                lastOilTemperature = data.yag_sicaklik;
+                lastVoltage = data.gerilim_primer / 1000f;
+                lastSecondaryVoltage = data.gerilim_sekonder / 1000f;
+                lastPrimaryCurrent = data.akim_primer;
+                lastSecondaryCurrent = data.akim_sekonder;
                 lastLoad = data.yuk_seviyesi;
             }
-            
-            // UI'ı güncelle (ana thread'de çalıştır)
-            UnityMainThreadDispatcher.Instance().Enqueue(() => {
-                UpdateUI();
-            });
+
+            UpdateUI();
         }
         catch (Exception e)
         {
-            Debug.LogError($"JSON parse hatası: {e.Message}\nVeri: {jsonData}");
+            Debug.LogError($"JSON parse hatasi: {e.Message}\nVeri: {jsonData}");
         }
     }
     
@@ -388,10 +450,8 @@ public class SimpleMQTTReceiver : MonoBehaviour
             Debug.Log($"[MQTT] 🔴 FDI Saldırısı başladı! {typeName} = {value}");
         }
         
-        // UI'ı hemen güncelle
-        UnityMainThreadDispatcher.Instance().Enqueue(() => {
-            UpdateUI();
-        });
+        // UI hemen guncelle. Terminal komutlari ana thread'den gelir.
+        UpdateUI();
     }
     
     /// <summary>
@@ -423,6 +483,37 @@ public class SimpleMQTTReceiver : MonoBehaviour
             return attackValue;
         return lastLoad;
     }
+
+public float GetLastOilTemperature()
+    {
+        return lastOilTemperature;
+    }
+
+    public float GetLastSecondaryVoltage()
+    {
+        return lastSecondaryVoltage;
+    }
+
+    public float GetLastPrimaryCurrent()
+    {
+        return lastPrimaryCurrent;
+    }
+
+    public float GetLastSecondaryCurrent()
+    {
+        return lastSecondaryCurrent;
+    }
+
+    public int GetMessageCounter()
+    {
+        return messageCounter;
+    }
+
+    public string GetLastRawJson()
+    {
+        return lastRawJson;
+    }
+
     
     /// <summary>
     /// Son mesajın alındığı zamanı döndürür (Time.time cinsinden)
