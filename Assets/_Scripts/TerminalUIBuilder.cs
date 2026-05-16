@@ -16,6 +16,7 @@ public class TerminalUIBuilder : MonoBehaviour
     static readonly Color ColAccent = new Color(0.05f, 0.82f, 0.62f, 1f);
     static readonly Color ColInput = new Color(0.030f, 0.039f, 0.050f, 1f);
     static readonly Color ColWarning = new Color(0.72f, 0.08f, 0.08f, 0.96f);
+    static readonly Color ColAlarmPanel = new Color(0.070f, 0.034f, 0.038f, 0.98f);
 
     readonly List<SCADAHMIController.ComponentStatusBinding> componentBindings =
         new List<SCADAHMIController.ComponentStatusBinding>();
@@ -46,11 +47,14 @@ public class TerminalUIBuilder : MonoBehaviour
 
     TMP_Text breakerStateText;
     TMP_Text breakerDetailText;
+    TMP_Text breakerCommandSourceText;
+    TMP_Text breakerLastCommandTimeText;
     Image breakerStateIndicator;
     Image breakerMimicIndicator;
 
     TMP_Text alarmListText;
     TMP_Text alarmCountText;
+    Image alarmPanelImage;
 
     void Awake()
     {
@@ -297,22 +301,21 @@ public class TerminalUIBuilder : MonoBehaviour
 
     void BuildIEDPanel(RectTransform parent)
     {
-        GameObject panel = CreateTitledLayoutPanel(parent, "IEDPanel", "IED PROTECTION RELAY / GOOSE", new Vector2(0f, 0.49f), Vector2.one);
+        GameObject panel = CreateTitledLayoutPanel(parent, "IEDPanel", "IED PROTECTION RELAY / GOOSE", new Vector2(0f, 0.585f), Vector2.one);
         iedCurrentText = AddDataRow(panel.transform, "Current Ampere", "420 A");
         iedThresholdText = AddDataRow(panel.transform, "Trip Threshold", "900 A");
         iedTripStatusText = AddDataRow(panel.transform, "Trip Status", "NO TRIP");
         iedStNumText = AddDataRow(panel.transform, "GOOSE stNum", "1");
         iedSqNumText = AddDataRow(panel.transform, "GOOSE sqNum", "0");
         iedAttackText = AddDataRow(panel.transform, "Security", "No attack");
-        iedLastGooseText = AddBlockRow(panel.transform, "Last GOOSE Message", "GOOSE idle", 62f);
     }
 
     void BuildBreakerPanel(RectTransform parent)
     {
-        GameObject panel = CreateTitledLayoutPanel(parent, "BreakerPanel", "CIRCUIT BREAKER XCBR1", new Vector2(0f, 0.315f), new Vector2(1f, 0.475f));
+        GameObject panel = CreateTitledLayoutPanel(parent, "BreakerPanel", "CIRCUIT BREAKER XCBR1", new Vector2(0f, 0.305f), new Vector2(1f, 0.565f));
 
         GameObject row = CreateUI("BreakerStateRow", panel.transform);
-        AddLayout(row, -1f, 44f).flexibleWidth = 1f;
+        AddLayout(row, -1f, 34f).flexibleWidth = 1f;
         HorizontalLayoutGroup layout = row.AddComponent<HorizontalLayoutGroup>();
         layout.spacing = 12;
         layout.childAlignment = TextAnchor.MiddleLeft;
@@ -321,20 +324,25 @@ public class TerminalUIBuilder : MonoBehaviour
         layout.childForceExpandWidth = false;
         layout.childForceExpandHeight = false;
 
-        breakerStateIndicator = CreateIndicator(row.transform, "BreakerStateLamp", SCADAHMIController.NormalColor, 24f);
-        breakerStateText = CreateTMP("BreakerStateText", row.transform, "CLOSED", 25, SCADAHMIController.NormalColor, FontStyles.Bold);
+        breakerStateIndicator = CreateIndicator(row.transform, "BreakerStateLamp", SCADAHMIController.NormalColor, 20f);
+        breakerStateText = CreateTMP("BreakerStateText", row.transform, "CLOSED", 22, SCADAHMIController.NormalColor, FontStyles.Bold);
         breakerStateText.alignment = TextAlignmentOptions.MidlineLeft;
-        AddLayout(breakerStateText.gameObject, -1f, 40f).flexibleWidth = 1f;
+        AddLayout(breakerStateText.gameObject, -1f, 32f).flexibleWidth = 1f;
 
-        breakerDetailText = AddBlockRow(panel.transform, "Operation", "Initial closed state", 38f);
+        breakerCommandSourceText = AddDataRow(panel.transform, "Command Source", "operator");
+        breakerLastCommandTimeText = AddDataRow(panel.transform, "Last Command Time", "--");
+        breakerDetailText = AddBlockRow(panel.transform, "Operation", "Initial closed state", 30f);
     }
 
     void BuildAlarmPanel(RectTransform parent)
     {
-        GameObject panel = CreateTitledLayoutPanel(parent, "AlarmPanel", "ALARM PANEL", Vector2.zero, new Vector2(1f, 0.30f));
+        GameObject panel = CreateTitledLayoutPanel(parent, "AlarmPanel", "ALARM PANEL", Vector2.zero, new Vector2(1f, 0.285f));
+        alarmPanelImage = panel.GetComponent<Image>();
+        if (alarmPanelImage != null)
+            alarmPanelImage.color = ColAlarmPanel;
 
         GameObject countRow = CreateUI("AlarmCountRow", panel.transform);
-        AddLayout(countRow, -1f, 24f).flexibleWidth = 1f;
+        AddLayout(countRow, -1f, 20f).flexibleWidth = 1f;
         HorizontalLayoutGroup countLayout = countRow.AddComponent<HorizontalLayoutGroup>();
         countLayout.childAlignment = TextAnchor.MiddleLeft;
         countLayout.childControlWidth = true;
@@ -342,18 +350,18 @@ public class TerminalUIBuilder : MonoBehaviour
         countLayout.childForceExpandWidth = false;
         countLayout.childForceExpandHeight = false;
 
-        TMP_Text label = CreateTMP("AlarmCountLabel", countRow.transform, "Active alarms", 12, ColDim);
-        AddLayout(label.gameObject, -1f, 22f).flexibleWidth = 1f;
+        TMP_Text label = CreateTMP("AlarmCountLabel", countRow.transform, "Active alarms", 11, ColDim);
+        AddLayout(label.gameObject, -1f, 18f).flexibleWidth = 1f;
 
-        alarmCountText = CreateTMP("AlarmCount", countRow.transform, "0", 18, ColAccent, FontStyles.Bold);
+        alarmCountText = CreateTMP("AlarmCount", countRow.transform, "0", 15, ColAccent, FontStyles.Bold);
         alarmCountText.alignment = TextAlignmentOptions.MidlineRight;
-        AddLayout(alarmCountText.gameObject, 42f, 22f);
+        AddLayout(alarmCountText.gameObject, 42f, 18f);
 
-        alarmListText = CreateTMP("AlarmList", panel.transform, "<color=#728087>No active alarms</color>", 12, ColText);
+        alarmListText = CreateTMP("AlarmList", panel.transform, "<color=#728087>No active alarms</color>", 11, ColText);
         alarmListText.richText = true;
         alarmListText.enableWordWrapping = true;
         alarmListText.overflowMode = TextOverflowModes.Truncate;
-        LayoutElement alarmLayout = AddLayout(alarmListText.gameObject, -1f, 130f);
+        LayoutElement alarmLayout = AddLayout(alarmListText.gameObject, -1f, 62f);
         alarmLayout.flexibleWidth = 1f;
         alarmLayout.flexibleHeight = 1f;
     }
@@ -366,23 +374,23 @@ public class TerminalUIBuilder : MonoBehaviour
         AddOutline(panel, new Color(ColLine.r, ColLine.g, ColLine.b, 0.20f), new Vector2(1f, -1f));
 
         VerticalLayoutGroup layout = panel.AddComponent<VerticalLayoutGroup>();
-        layout.padding = new RectOffset(16, 16, 10, 12);
-        layout.spacing = 7;
+        layout.padding = new RectOffset(14, 14, 8, 8);
+        layout.spacing = 4;
         layout.childControlWidth = true;
         layout.childControlHeight = true;
         layout.childForceExpandWidth = true;
         layout.childForceExpandHeight = false;
 
-        TMP_Text header = CreateTMP("PanelTitle", panel.transform, title, 14, ColAccent, FontStyles.Bold);
+        TMP_Text header = CreateTMP("PanelTitle", panel.transform, title, 13, ColAccent, FontStyles.Bold);
         header.alignment = TextAlignmentOptions.MidlineLeft;
-        AddLayout(header.gameObject, -1f, 24f).flexibleWidth = 1f;
+        AddLayout(header.gameObject, -1f, 20f).flexibleWidth = 1f;
         return panel;
     }
 
     TMP_Text AddDataRow(Transform parent, string labelText, string valueText)
     {
         GameObject row = CreateUI(labelText.Replace(" ", "") + "Row", parent);
-        AddLayout(row, -1f, 28f).flexibleWidth = 1f;
+        AddLayout(row, -1f, 22f).flexibleWidth = 1f;
         HorizontalLayoutGroup layout = row.AddComponent<HorizontalLayoutGroup>();
         layout.spacing = 8;
         layout.childAlignment = TextAnchor.MiddleLeft;
@@ -391,13 +399,17 @@ public class TerminalUIBuilder : MonoBehaviour
         layout.childForceExpandWidth = false;
         layout.childForceExpandHeight = false;
 
-        TMP_Text label = CreateTMP("Label", row.transform, labelText, 12, ColDim);
+        TMP_Text label = CreateTMP("Label", row.transform, labelText, 10, ColDim);
         label.alignment = TextAlignmentOptions.MidlineLeft;
-        AddLayout(label.gameObject, 150f, 24f);
+        AddLayout(label.gameObject, 145f, 20f);
 
-        TMP_Text value = CreateTMP("Value", row.transform, valueText, 13, ColText, FontStyles.Bold);
+        TMP_Text value = CreateTMP("Value", row.transform, valueText, 11, ColText, FontStyles.Bold);
         value.alignment = TextAlignmentOptions.MidlineRight;
-        AddLayout(value.gameObject, -1f, 24f).flexibleWidth = 1f;
+        value.enableAutoSizing = true;
+        value.fontSizeMin = 9f;
+        value.fontSizeMax = 11f;
+        value.overflowMode = TextOverflowModes.Ellipsis;
+        AddLayout(value.gameObject, -1f, 20f).flexibleWidth = 1f;
         return value;
     }
 
@@ -408,20 +420,20 @@ public class TerminalUIBuilder : MonoBehaviour
         AddLayout(block, -1f, height).flexibleWidth = 1f;
 
         VerticalLayoutGroup layout = block.AddComponent<VerticalLayoutGroup>();
-        layout.padding = new RectOffset(10, 10, 5, 5);
-        layout.spacing = 2;
+        layout.padding = new RectOffset(9, 9, 4, 4);
+        layout.spacing = 1;
         layout.childControlWidth = true;
         layout.childControlHeight = true;
         layout.childForceExpandWidth = true;
         layout.childForceExpandHeight = false;
 
-        TMP_Text label = CreateTMP("Label", block.transform, labelText, 10, ColDim);
-        AddLayout(label.gameObject, -1f, 16f).flexibleWidth = 1f;
+        TMP_Text label = CreateTMP("Label", block.transform, labelText, 9, ColDim);
+        AddLayout(label.gameObject, -1f, 12f).flexibleWidth = 1f;
 
-        TMP_Text value = CreateTMP("Value", block.transform, valueText, 12, ColText, FontStyles.Bold);
+        TMP_Text value = CreateTMP("Value", block.transform, valueText, 10, ColText, FontStyles.Bold);
         value.enableWordWrapping = true;
-        value.overflowMode = TextOverflowModes.Truncate;
-        AddLayout(value.gameObject, -1f, height - 24f).flexibleWidth = 1f;
+        value.overflowMode = TextOverflowModes.Ellipsis;
+        AddLayout(value.gameObject, -1f, height - 18f).flexibleWidth = 1f;
         return value;
     }
 
@@ -575,6 +587,8 @@ public class TerminalUIBuilder : MonoBehaviour
     {
         IEDController ied = gameObject.GetComponent<IEDController>() ?? gameObject.AddComponent<IEDController>();
         CircuitBreakerController breaker = gameObject.GetComponent<CircuitBreakerController>() ?? gameObject.AddComponent<CircuitBreakerController>();
+        BreakerController breakerScenario = gameObject.GetComponent<BreakerController>() ?? gameObject.AddComponent<BreakerController>();
+        BreakerMQTTReceiver breakerMqtt = gameObject.GetComponent<BreakerMQTTReceiver>() ?? gameObject.AddComponent<BreakerMQTTReceiver>();
         AlarmPanelController alarms = gameObject.GetComponent<AlarmPanelController>() ?? gameObject.AddComponent<AlarmPanelController>();
         SCADAHMIController hmi = gameObject.GetComponent<SCADAHMIController>() ?? gameObject.AddComponent<SCADAHMIController>();
         SCADATerminalController scadaTerminal = gameObject.GetComponent<SCADATerminalController>() ?? gameObject.AddComponent<SCADATerminalController>();
@@ -584,6 +598,7 @@ public class TerminalUIBuilder : MonoBehaviour
         hmi.circuitBreaker = breaker;
         hmi.alarmPanel = alarms;
         hmi.terminalController = scadaTerminal;
+        hmi.breakerControlScenario = breakerScenario;
         hmi.componentBindings = componentBindings;
         hmi.systemModeText = systemModeText;
         hmi.protocolText = protocolText;
@@ -598,6 +613,8 @@ public class TerminalUIBuilder : MonoBehaviour
         hmi.breakerStateText = breakerStateText;
         hmi.breakerDetailText = breakerDetailText;
         hmi.breakerStateIndicator = breakerStateIndicator;
+        hmi.breakerCommandSourceText = breakerCommandSourceText;
+        hmi.breakerLastCommandTimeText = breakerLastCommandTimeText;
 
         ied.currentText = iedCurrentText;
         ied.thresholdText = iedThresholdText;
@@ -613,8 +630,22 @@ public class TerminalUIBuilder : MonoBehaviour
         breaker.stateIndicator = breakerStateIndicator;
         breaker.mimicIndicator = breakerMimicIndicator;
 
+        breakerScenario.circuitBreaker = breaker;
+        breakerScenario.hmiController = hmi;
+        breakerScenario.alarmPanelController = alarms;
+        breakerScenario.terminalController = scadaTerminal;
+        breakerScenario.breakerStatusText = breakerStateText;
+        breakerScenario.commandSourceText = breakerCommandSourceText;
+        breakerScenario.lastCommandTimeText = breakerLastCommandTimeText;
+        breakerScenario.alarmPanelImage = alarmPanelImage;
+        breakerScenario.alarmPanelObject = alarmPanelImage != null ? alarmPanelImage.gameObject : null;
+        breakerScenario.energyLineImages = new[] { breakerMimicIndicator };
+
+        breakerMqtt.breakerController = breakerScenario;
+
         alarms.alarmListText = alarmListText;
         alarms.alarmCountText = alarmCountText;
+        alarms.maxAlarmRows = 3;
 
         scadaTerminal.hmiController = hmi;
         scadaTerminal.legacyTerminal = legacyTerminal;

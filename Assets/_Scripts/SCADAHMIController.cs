@@ -25,6 +25,7 @@ public class SCADAHMIController : MonoBehaviour
     public AlarmPanelController alarmPanel;
     public SCADATerminalController terminalController;
     public SimpleMQTTReceiver mqttReceiver;
+    public BreakerController breakerControlScenario;
 
     [Header("Mimic Component Status")]
     public List<ComponentStatusBinding> componentBindings = new List<ComponentStatusBinding>();
@@ -42,6 +43,8 @@ public class SCADAHMIController : MonoBehaviour
     public TMP_Text breakerStateText;
     public TMP_Text breakerDetailText;
     public Image breakerStateIndicator;
+    public TMP_Text breakerCommandSourceText;
+    public TMP_Text breakerLastCommandTimeText;
 
     [Header("Header")]
     public TMP_Text systemModeText;
@@ -98,6 +101,8 @@ public class SCADAHMIController : MonoBehaviour
             terminalController = GetComponent<SCADATerminalController>() ?? FindFirstObjectByType<SCADATerminalController>();
         if (mqttReceiver == null)
             mqttReceiver = FindFirstObjectByType<SimpleMQTTReceiver>();
+        if (breakerControlScenario == null)
+            breakerControlScenario = GetComponent<BreakerController>() ?? FindFirstObjectByType<BreakerController>();
     }
 
     public void SetFault(bool active)
@@ -172,6 +177,11 @@ public class SCADAHMIController : MonoBehaviour
         yield return $"Transformer        : {GetComponentStatus("Transformer")}";
         yield return $"Busbar             : {GetComponentStatus("Busbar")}";
         yield return $"Circuit Breaker    : {circuitBreaker.GetStateLabel()}";
+        if (breakerControlScenario != null)
+        {
+            yield return $"Command Source     : {breakerControlScenario.LastCommandSource}";
+            yield return $"Last Command Time  : {breakerControlScenario.LastCommandTime}";
+        }
         yield return $"IED Protection     : {iedController.GetProtectionStateLabel()}";
         yield return $"CT / Current Sensor: {GetComponentStatus("CT / Current Sensor")}";
         yield return $"Network Switch     : {GetComponentStatus("Network Switch")}";
@@ -248,6 +258,10 @@ public class SCADAHMIController : MonoBehaviour
                 breakerDetailText.text = circuitBreaker.lastOperation;
             if (breakerStateIndicator != null)
                 breakerStateIndicator.color = circuitBreaker.GetStateColor();
+            if (breakerCommandSourceText != null && breakerControlScenario != null)
+                breakerCommandSourceText.text = breakerControlScenario.LastCommandSource;
+            if (breakerLastCommandTimeText != null && breakerControlScenario != null)
+                breakerLastCommandTimeText.text = breakerControlScenario.LastCommandTime;
         }
     }
 
@@ -272,7 +286,9 @@ public class SCADAHMIController : MonoBehaviour
     {
         if (systemModeText != null)
         {
-            if (iedController != null && iedController.attackDetected)
+            if (breakerControlScenario != null && breakerControlScenario.HasActiveSecurityAlarm)
+                systemModeText.text = "CYBER SECURITY EVENT";
+            else if (iedController != null && iedController.attackDetected)
                 systemModeText.text = "CYBER SECURITY EVENT";
             else if (iedController != null && (iedController.faultDetected || iedController.tripStatus))
                 systemModeText.text = "PROTECTION EVENT";

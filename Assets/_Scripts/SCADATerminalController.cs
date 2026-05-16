@@ -80,6 +80,17 @@ public class SCADATerminalController : MonoBehaviour
         }
     }
 
+    public void WriteExternalLine(string line)
+    {
+        if (outputText == null)
+        {
+            Debug.Log(line);
+            return;
+        }
+
+        outputText.text += line + "\n";
+    }
+
     public void EnsureReferences()
     {
         if (hmiController == null)
