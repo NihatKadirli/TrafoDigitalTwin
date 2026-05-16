@@ -1,413 +1,816 @@
+using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
-/// <summary>
-/// Terminal UI'ını runtime'da oluşturur. Modern dark theme (1920x1080).
-/// Terminal_Canvas objesine eklenir. Awake'te tüm UI elemanlarını oluşturur.
-/// </summary>
 public class TerminalUIBuilder : MonoBehaviour
 {
-    // ── Renkler ──
-    static readonly Color COL_BG       = new Color(0.035f, 0.043f, 0.055f, 0.98f);
-    static readonly Color COL_TITLE    = new Color(0.02f, 0.025f, 0.035f, 1f);
-    static readonly Color COL_OUTPUT   = new Color(0.018f, 0.028f, 0.026f, 0.96f);
-    static readonly Color COL_INPUT    = new Color(0.025f, 0.032f, 0.042f, 1f);
-    static readonly Color COL_STATUS   = new Color(0.035f, 0.043f, 0.055f, 1f);
-    static readonly Color COL_ACCENT   = new Color(0.05f, 0.82f, 0.62f, 1f);
-    static readonly Color COL_TEXT     = new Color(0.82f, 0.88f, 0.90f, 1f);
-    static readonly Color COL_DIM      = new Color(0.50f, 0.58f, 0.62f, 1f);
-    static readonly Color COL_WARN_BG  = new Color(0.72f, 0.08f, 0.08f, 0.95f);
-    static readonly Color COL_BTN      = new Color(0.12f, 0.15f, 0.17f, 1f);
-    static readonly Color COL_BTN_SEND = new Color(0.04f, 0.62f, 0.45f, 1f);
-    static readonly Color COL_SCROLL   = new Color(0.25f, 0.27f, 0.30f, 0.6f);
+    static readonly Color ColBackground = new Color(0.025f, 0.031f, 0.040f, 0.98f);
+    static readonly Color ColPanel = new Color(0.045f, 0.056f, 0.070f, 0.98f);
+    static readonly Color ColPanelDark = new Color(0.026f, 0.034f, 0.044f, 1f);
+    static readonly Color ColTitle = new Color(0.015f, 0.020f, 0.028f, 1f);
+    static readonly Color ColLine = new Color(0.18f, 0.64f, 0.82f, 0.65f);
+    static readonly Color ColGoose = new Color(1f, 0.76f, 0.24f, 0.75f);
+    static readonly Color ColText = new Color(0.82f, 0.88f, 0.90f, 1f);
+    static readonly Color ColDim = new Color(0.48f, 0.56f, 0.61f, 1f);
+    static readonly Color ColAccent = new Color(0.05f, 0.82f, 0.62f, 1f);
+    static readonly Color ColInput = new Color(0.030f, 0.039f, 0.050f, 1f);
+    static readonly Color ColWarning = new Color(0.72f, 0.08f, 0.08f, 0.96f);
+
+    readonly List<SCADAHMIController.ComponentStatusBinding> componentBindings =
+        new List<SCADAHMIController.ComponentStatusBinding>();
+
+    RectTransform terminalWindow;
+    GameObject bodyArea;
+    GameObject warningPanel;
+    Button minButton;
+    Button toggleButton;
+
+    TMP_Text systemModeText;
+    TMP_Text protocolText;
+    TMP_Text clockText;
+    TMP_Text statusBarText;
+    TMP_Text outputText;
+    TMP_InputField inputField;
+    Button sendButton;
+    ScrollRect outputScrollRect;
+
+    TMP_Text iedCurrentText;
+    TMP_Text iedThresholdText;
+    TMP_Text iedTripStatusText;
+    TMP_Text iedStNumText;
+    TMP_Text iedSqNumText;
+    TMP_Text iedLastGooseText;
+    TMP_Text iedAttackText;
+    Image iedIndicator;
+
+    TMP_Text breakerStateText;
+    TMP_Text breakerDetailText;
+    Image breakerStateIndicator;
+    Image breakerMimicIndicator;
+
+    TMP_Text alarmListText;
+    TMP_Text alarmCountText;
 
     void Awake()
     {
         SetupCanvas();
-        var window = BuildWindow();
-        var titleBar = BuildTitleBar(window);
-        var contentArea = BuildContentArea(window);
-        var outputScroll = BuildOutputArea(contentArea);
-        var statusBar = BuildStatusBar(contentArea.GetComponent<RectTransform>());
-        var inputArea = BuildInputArea(contentArea);
-        var warningPanel = BuildWarningPanel(window);
-
-        WireComponents(window, titleBar, contentArea, outputScroll, inputArea, statusBar, warningPanel);
+        BuildScadaHmi();
+        WireComponents();
     }
 
     void SetupCanvas()
     {
-        var c = gameObject.GetComponent<Canvas>() ?? gameObject.AddComponent<Canvas>();
-        c.renderMode = RenderMode.ScreenSpaceOverlay;
-        c.sortingOrder = 100;
+        Canvas canvas = gameObject.GetComponent<Canvas>() ?? gameObject.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 100;
 
-        var s = gameObject.GetComponent<CanvasScaler>() ?? gameObject.AddComponent<CanvasScaler>();
-        s.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        s.referenceResolution = new Vector2(1920, 1080);
-        s.matchWidthOrHeight = 0.5f;
+        CanvasScaler scaler = gameObject.GetComponent<CanvasScaler>() ?? gameObject.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920, 1080);
+        scaler.matchWidthOrHeight = 0.5f;
 
-        if (!gameObject.GetComponent<GraphicRaycaster>())
+        if (gameObject.GetComponent<GraphicRaycaster>() == null)
             gameObject.AddComponent<GraphicRaycaster>();
     }
 
-    // ─── WINDOW ────────────────────────────────────────────────
-RectTransform BuildWindow()
+    void BuildScadaHmi()
     {
-        var go = CreateUI("TerminalWindow", transform);
-        var rt = go.GetComponent<RectTransform>();
-        AddImage(go, COL_BG);
-        go.AddComponent<RectMask2D>();
-        rt.anchorMin = new Vector2(0.035f, 0.055f);
-        rt.anchorMax = new Vector2(0.965f, 0.945f);
-        rt.pivot = new Vector2(0.5f, 0.5f);
-        rt.offsetMin = Vector2.zero;
-        rt.offsetMax = Vector2.zero;
-        rt.sizeDelta = Vector2.zero;
-        rt.anchoredPosition = Vector2.zero;
+        GameObject windowGO = CreatePanel("TerminalWindow", transform, ColBackground);
+        terminalWindow = windowGO.GetComponent<RectTransform>();
+        SetAnchors(terminalWindow, new Vector2(0.035f, 0.055f), new Vector2(0.965f, 0.945f), Vector2.zero, Vector2.zero);
+        terminalWindow.gameObject.AddComponent<RectMask2D>();
+        AddOutline(terminalWindow.gameObject, new Color(ColAccent.r, ColAccent.g, ColAccent.b, 0.32f), new Vector2(2f, -2f));
 
-        var outline = go.AddComponent<Outline>();
-        outline.effectColor = new Color(COL_ACCENT.r, COL_ACCENT.g, COL_ACCENT.b, 0.35f);
-        outline.effectDistance = new Vector2(2f, -2f);
+        RectTransform titleBar = BuildTitleBar(terminalWindow);
 
-        return rt;
+        bodyArea = CreateUI("SCADABody", terminalWindow);
+        RectTransform bodyRT = bodyArea.GetComponent<RectTransform>();
+        SetAnchors(bodyRT, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -54f));
+
+        BuildHeader(bodyRT);
+        BuildMainArea(bodyRT);
+        BuildConsole(bodyRT);
+        warningPanel = BuildWarningPanel(terminalWindow);
+
+        Transform controls = titleBar.Find("WindowControls");
+        if (controls != null)
+        {
+            minButton = controls.Find("MinBtn")?.GetComponent<Button>();
+            toggleButton = controls.Find("ToggleBtn")?.GetComponent<Button>();
+        }
     }
 
-    // ─── TITLE BAR ─────────────────────────────────────────────
-RectTransform BuildTitleBar(RectTransform parent)
+    RectTransform BuildTitleBar(RectTransform parent)
     {
-        var go = CreateUI("TitleBar", parent);
-        var rt = go.GetComponent<RectTransform>();
-        AddImage(go, COL_TITLE);
-        rt.anchorMin = new Vector2(0f, 1f);
-        rt.anchorMax = new Vector2(1f, 1f);
+        GameObject bar = CreateUI("TitleBar", parent);
+        RectTransform rt = bar.GetComponent<RectTransform>();
+        SetAnchors(rt, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
         rt.pivot = new Vector2(0.5f, 1f);
-        rt.anchoredPosition = Vector2.zero;
-        rt.sizeDelta = new Vector2(0f, 52f);
+        rt.sizeDelta = new Vector2(0f, 54f);
+        AddImage(bar, ColTitle);
 
-        var dot = CreateUI("Dot", go.transform);
-        AddImage(dot, COL_ACCENT);
-        var dotRT = dot.GetComponent<RectTransform>();
-        dotRT.anchorMin = new Vector2(0f, 0.5f);
-        dotRT.anchorMax = new Vector2(0f, 0.5f);
-        dotRT.pivot = new Vector2(0f, 0.5f);
-        dotRT.anchoredPosition = new Vector2(18f, 0f);
-        dotRT.sizeDelta = new Vector2(10f, 30f);
-
-        var title = CreateTMP("TitleLabel", go.transform,
-            "SCADA KONTROL TERMINALI - TRAFO MERKEZI", 17, COL_TEXT, FontStyles.Bold);
-        title.enableWordWrapping = false;
-        title.overflowMode = TextOverflowModes.Ellipsis;
+        TMP_Text title = CreateTMP("TitleLabel", bar.transform,
+            "SCADA/HMI - TRAFO MERKEZI DIJITAL IKIZI", 18, ColText, FontStyles.Bold);
         title.alignment = TextAlignmentOptions.MidlineLeft;
-        var titleRT = title.GetComponent<RectTransform>();
-        titleRT.anchorMin = new Vector2(0f, 0f);
-        titleRT.anchorMax = new Vector2(1f, 1f);
-        titleRT.offsetMin = new Vector2(38f, 0f);
-        titleRT.offsetMax = new Vector2(-230f, 0f);
+        title.overflowMode = TextOverflowModes.Ellipsis;
+        SetAnchors(title.rectTransform, Vector2.zero, Vector2.one, new Vector2(42f, 0f), new Vector2(-330f, 0f));
 
-        var controls = CreateUI("WindowControls", go.transform);
-        var controlsRT = controls.GetComponent<RectTransform>();
-        controlsRT.anchorMin = new Vector2(1f, 0f);
-        controlsRT.anchorMax = new Vector2(1f, 1f);
+        GameObject accent = CreateUI("Accent", bar.transform);
+        AddImage(accent, ColAccent);
+        RectTransform accentRT = accent.GetComponent<RectTransform>();
+        SetAnchors(accentRT, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), Vector2.zero, Vector2.zero);
+        accentRT.pivot = new Vector2(0f, 0.5f);
+        accentRT.anchoredPosition = new Vector2(18f, 0f);
+        accentRT.sizeDelta = new Vector2(10f, 32f);
+
+        GameObject controls = CreateUI("WindowControls", bar.transform);
+        RectTransform controlsRT = controls.GetComponent<RectTransform>();
+        SetAnchors(controlsRT, new Vector2(1f, 0f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
         controlsRT.pivot = new Vector2(1f, 0.5f);
         controlsRT.anchoredPosition = new Vector2(-16f, 0f);
-        controlsRT.sizeDelta = new Vector2(210f, 0f);
-        var controlsLayout = controls.AddComponent<HorizontalLayoutGroup>();
-        controlsLayout.spacing = 10;
-        controlsLayout.padding = new RectOffset(0, 0, 0, 0);
-        controlsLayout.childControlWidth = false;
-        controlsLayout.childControlHeight = false;
-        controlsLayout.childForceExpandWidth = false;
-        controlsLayout.childForceExpandHeight = false;
-        controlsLayout.childAlignment = TextAnchor.MiddleRight;
+        controlsRT.sizeDelta = new Vector2(304f, 0f);
 
-        var hint = CreateTMP("HintLabel", controls.transform, "F1 PANEL | F2 MINI", 11, COL_DIM);
-        hint.overflowMode = TextOverflowModes.Ellipsis;
-        AddLE(hint.gameObject, 116, 30);
+        HorizontalLayoutGroup layout = controls.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 10;
+        layout.childAlignment = TextAnchor.MiddleRight;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
 
-        CreateTitleBtn(controls.transform, "MinBtn", "-");
-        CreateTitleBtn(controls.transform, "MaxBtn", "x");
+        TMP_Text hint = CreateTMP("HintLabel", controls.transform, "F1 PANEL | F2 MINI", 11, ColDim);
+        hint.alignment = TextAlignmentOptions.MidlineRight;
+        AddLayout(hint.gameObject, 150f, 30f);
+
+        CreateTitleButton(controls.transform, "MinBtn", "-");
+        CreateTitleButton(controls.transform, "ToggleBtn", "x");
 
         return rt;
     }
 
-Button CreateTitleBtn(Transform parent, string n, string label)
+    void BuildHeader(RectTransform parent)
     {
-        var go = CreateUI(n, parent);
-        var img = AddImage(go, COL_BTN);
-        AddLE(go, 32, 30);
-        var btn = go.AddComponent<Button>();
-        btn.targetGraphic = img;
-        var colors = btn.colors;
-        colors.highlightedColor = new Color(0.3f, 0.32f, 0.36f, 1f);
-        colors.pressedColor = new Color(0.15f, 0.16f, 0.18f, 1f);
-        btn.colors = colors;
-        var labelText = CreateTMP("Label", go.transform, label, 16, COL_TEXT, FontStyles.Bold, TextAlignmentOptions.Center);
-        Stretch(labelText.GetComponent<RectTransform>());
-        return btn;
+        GameObject header = CreatePanel("SCADAHeader", parent, ColPanelDark);
+        RectTransform rt = header.GetComponent<RectTransform>();
+        SetAnchors(rt, new Vector2(0f, 0.925f), new Vector2(1f, 1f), new Vector2(16f, 8f), new Vector2(-16f, -10f));
+
+        HorizontalLayoutGroup layout = header.AddComponent<HorizontalLayoutGroup>();
+        layout.padding = new RectOffset(18, 18, 7, 7);
+        layout.spacing = 18;
+        layout.childAlignment = TextAnchor.MiddleLeft;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+
+        systemModeText = CreateTMP("SystemMode", header.transform, "NORMAL OPERATION", 18, SCADAHMIController.NormalColor, FontStyles.Bold);
+        AddLayout(systemModeText.gameObject, 240f, 34f);
+
+        protocolText = CreateTMP("ProtocolText", header.transform, "IEC 61850 MMS monitored | GOOSE protection event simulation", 13, ColDim);
+        protocolText.alignment = TextAlignmentOptions.MidlineLeft;
+        LayoutElement protocolLayout = AddLayout(protocolText.gameObject, -1f, 34f);
+        protocolLayout.flexibleWidth = 1f;
+
+        clockText = CreateTMP("ClockText", header.transform, "--:--:--", 18, ColAccent, FontStyles.Bold);
+        clockText.alignment = TextAlignmentOptions.MidlineRight;
+        AddLayout(clockText.gameObject, 120f, 34f);
     }
 
-    // ─── CONTENT AREA ──────────────────────────────────────────
-GameObject BuildContentArea(RectTransform parent)
+    void BuildMainArea(RectTransform parent)
     {
-        var go = CreateUI("ContentArea", parent);
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.one;
-        rt.offsetMin = Vector2.zero;
-        rt.offsetMax = new Vector2(0f, -52f);
-        return go;
+        GameObject main = CreateUI("MainArea", parent);
+        RectTransform mainRT = main.GetComponent<RectTransform>();
+        SetAnchors(mainRT, new Vector2(0f, 0.315f), new Vector2(1f, 0.925f), new Vector2(16f, 8f), new Vector2(-16f, -8f));
+
+        GameObject mimic = CreatePanel("SubstationMimic", main.transform, ColPanel);
+        RectTransform mimicRT = mimic.GetComponent<RectTransform>();
+        SetAnchors(mimicRT, Vector2.zero, new Vector2(0.655f, 1f), Vector2.zero, new Vector2(-8f, 0f));
+        BuildMimicDiagram(mimicRT);
+
+        GameObject side = CreateUI("RightPanels", main.transform);
+        RectTransform sideRT = side.GetComponent<RectTransform>();
+        SetAnchors(sideRT, new Vector2(0.655f, 0f), Vector2.one, new Vector2(8f, 0f), Vector2.zero);
+        BuildRightPanels(sideRT);
     }
 
-    // ─── OUTPUT AREA (ScrollRect) ──────────────────────────────
-ScrollRect BuildOutputArea(GameObject parent)
+    void BuildMimicDiagram(RectTransform parent)
     {
-        var outputGO = CreateUI("OutputPanel", parent.transform);
-        var outputRT = outputGO.GetComponent<RectTransform>();
-        outputRT.anchorMin = Vector2.zero;
-        outputRT.anchorMax = Vector2.one;
-        outputRT.offsetMin = new Vector2(0f, 113f);
-        outputRT.offsetMax = Vector2.zero;
-        AddImage(outputGO, COL_OUTPUT);
-        outputGO.AddComponent<RectMask2D>();
+        TMP_Text title = CreateTMP("MimicTitle", parent, "SUBSTATION SINGLE LINE / IEC 61850 STATION BUS", 15, ColText, FontStyles.Bold);
+        title.alignment = TextAlignmentOptions.MidlineLeft;
+        SetAnchors(title.rectTransform, new Vector2(0f, 0.925f), new Vector2(1f, 1f), new Vector2(18f, 0f), new Vector2(-18f, 0f));
 
-        var txt = CreateTMP("OutputText", outputGO.transform,
-            "", 17, COL_TEXT, FontStyles.Normal, TextAlignmentOptions.TopLeft);
-        txt.enableWordWrapping = true;
-        txt.overflowMode = TextOverflowModes.Truncate;
-        txt.richText = true;
-        txt.font = TMP_Settings.defaultFontAsset;
-        txt.lineSpacing = 3f;
-        txt.margin = new Vector4(20f, 18f, 20f, 18f);
-        var txtRT = txt.GetComponent<RectTransform>();
-        txtRT.anchorMin = Vector2.zero;
-        txtRT.anchorMax = Vector2.one;
-        txtRT.pivot = new Vector2(0.5f, 0.5f);
-        txtRT.offsetMin = Vector2.zero;
-        txtRT.offsetMax = Vector2.zero;
-        return null;
+        AddLine(parent, "Line_Transformer_CT", new Vector2(0.275f, 0.68f), new Vector2(0.340f, 0.68f), 3f, ColLine);
+        AddLine(parent, "Line_CT_Busbar", new Vector2(0.485f, 0.635f), new Vector2(0.485f, 0.500f), 3f, ColLine);
+        AddLine(parent, "Line_Busbar_Breaker", new Vector2(0.610f, 0.535f), new Vector2(0.670f, 0.535f), 3f, ColLine);
+        AddLine(parent, "Line_CT_IED", new Vector2(0.595f, 0.735f), new Vector2(0.675f, 0.315f), 2f, ColGoose);
+        AddLine(parent, "Line_IED_Breaker", new Vector2(0.790f, 0.405f), new Vector2(0.790f, 0.475f), 2f, ColGoose);
+        AddLine(parent, "Line_IED_Switch", new Vector2(0.675f, 0.275f), new Vector2(0.595f, 0.275f), 2f, ColGoose);
+        AddLine(parent, "Line_Switch_Server", new Vector2(0.340f, 0.255f), new Vector2(0.275f, 0.255f), 2f, ColLine);
+
+        CreateComponentNode(parent, "Transformer", "Transformer", "T1 154/34.5 kV", new Vector2(0.035f, 0.565f), new Vector2(0.275f, 0.825f));
+        CreateComponentNode(parent, "CT / Current Sensor", "CT / Current Sensor", "MMXU.A.phsA", new Vector2(0.340f, 0.690f), new Vector2(0.610f, 0.855f));
+        CreateComponentNode(parent, "Busbar", "Busbar", "34.5 kV BUS-A", new Vector2(0.340f, 0.455f), new Vector2(0.610f, 0.620f));
+
+        SCADAHMIController.ComponentStatusBinding breakerBinding =
+            CreateComponentNode(parent, "Circuit Breaker", "Circuit Breaker", "XCBR1.Pos.stVal", new Vector2(0.670f, 0.455f), new Vector2(0.930f, 0.645f));
+        breakerMimicIndicator = breakerBinding.statusLight;
+
+        SCADAHMIController.ComponentStatusBinding iedBinding =
+            CreateComponentNode(parent, "IED Protection Relay", "IED Protection Relay", "PTOC/PTRC GOOSE", new Vector2(0.670f, 0.175f), new Vector2(0.945f, 0.390f));
+        iedIndicator = iedBinding.statusLight;
+
+        CreateComponentNode(parent, "Network Switch", "Network Switch", "Station Bus VLAN-10", new Vector2(0.325f, 0.145f), new Vector2(0.610f, 0.325f));
+        CreateComponentNode(parent, "SCADA Server", "SCADA Server", "HMI/MMS Client", new Vector2(0.035f, 0.145f), new Vector2(0.275f, 0.325f));
     }
 
-    // ─── INPUT AREA ────────────────────────────────────────────
-GameObject BuildInputArea(GameObject parent)
+    SCADAHMIController.ComponentStatusBinding CreateComponentNode(
+        RectTransform parent,
+        string componentName,
+        string title,
+        string detail,
+        Vector2 anchorMin,
+        Vector2 anchorMax)
     {
-        var sep = CreateUI("Separator", parent.transform);
-        AddImage(sep, new Color(COL_ACCENT.r, COL_ACCENT.g, COL_ACCENT.b, 0.22f));
-        var sepRT = sep.GetComponent<RectTransform>();
-        sepRT.anchorMin = new Vector2(0f, 0f);
-        sepRT.anchorMax = new Vector2(1f, 0f);
-        sepRT.pivot = new Vector2(0.5f, 0f);
-        sepRT.anchoredPosition = new Vector2(0f, 72f);
-        sepRT.sizeDelta = new Vector2(0f, 1f);
+        GameObject node = CreatePanel(componentName.Replace("/", "_"), parent, new Color(0.013f, 0.018f, 0.024f, 0.98f));
+        RectTransform rt = node.GetComponent<RectTransform>();
+        SetAnchors(rt, anchorMin, anchorMax, Vector2.zero, Vector2.zero);
+        AddRectBorder(node, new Color(ColLine.r, ColLine.g, ColLine.b, 0.90f), 1.25f);
 
-        var row = CreateUI("InputArea", parent.transform);
-        AddImage(row, COL_INPUT);
-        var rowRT = row.GetComponent<RectTransform>();
-        rowRT.anchorMin = new Vector2(0f, 0f);
-        rowRT.anchorMax = new Vector2(1f, 0f);
+        VerticalLayoutGroup layout = node.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(10, 10, 6, 6);
+        layout.spacing = 2;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+
+        GameObject row = CreateUI("Header", node.transform);
+        AddLayout(row, -1f, 20f).flexibleWidth = 1f;
+        HorizontalLayoutGroup rowLayout = row.AddComponent<HorizontalLayoutGroup>();
+        rowLayout.spacing = 8;
+        rowLayout.childAlignment = TextAnchor.MiddleLeft;
+        rowLayout.childControlWidth = true;
+        rowLayout.childControlHeight = true;
+        rowLayout.childForceExpandWidth = false;
+        rowLayout.childForceExpandHeight = false;
+
+        Image indicator = CreateIndicator(row.transform, "Indicator", SCADAHMIController.NormalColor, 9f);
+
+        TMP_Text titleText = CreateTMP("Name", row.transform, title, 11, ColText, FontStyles.Bold);
+        titleText.enableAutoSizing = true;
+        titleText.fontSizeMin = 9f;
+        titleText.fontSizeMax = 11f;
+        titleText.overflowMode = TextOverflowModes.Ellipsis;
+        AddLayout(titleText.gameObject, -1f, 18f).flexibleWidth = 1f;
+
+        TMP_Text detailText = CreateTMP("Detail", node.transform, detail, 9, ColDim);
+        detailText.alignment = TextAlignmentOptions.MidlineLeft;
+        detailText.overflowMode = TextOverflowModes.Ellipsis;
+        AddLayout(detailText.gameObject, -1f, 15f).flexibleWidth = 1f;
+
+        TMP_Text status = CreateTMP("Status", node.transform, "NORMAL", 10, SCADAHMIController.NormalColor, FontStyles.Bold);
+        status.alignment = TextAlignmentOptions.MidlineRight;
+        status.enableAutoSizing = true;
+        status.fontSizeMin = 9f;
+        status.fontSizeMax = 10f;
+        status.overflowMode = TextOverflowModes.Ellipsis;
+        AddLayout(status.gameObject, -1f, 15f).flexibleWidth = 1f;
+
+        SCADAHMIController.ComponentStatusBinding binding = new SCADAHMIController.ComponentStatusBinding
+        {
+            componentName = componentName,
+            statusText = status,
+            detailText = detailText,
+            statusLight = indicator
+        };
+        componentBindings.Add(binding);
+        return binding;
+    }
+
+    void BuildRightPanels(RectTransform parent)
+    {
+        BuildIEDPanel(parent);
+        BuildBreakerPanel(parent);
+        BuildAlarmPanel(parent);
+    }
+
+    void BuildIEDPanel(RectTransform parent)
+    {
+        GameObject panel = CreateTitledLayoutPanel(parent, "IEDPanel", "IED PROTECTION RELAY / GOOSE", new Vector2(0f, 0.49f), Vector2.one);
+        iedCurrentText = AddDataRow(panel.transform, "Current Ampere", "420 A");
+        iedThresholdText = AddDataRow(panel.transform, "Trip Threshold", "900 A");
+        iedTripStatusText = AddDataRow(panel.transform, "Trip Status", "NO TRIP");
+        iedStNumText = AddDataRow(panel.transform, "GOOSE stNum", "1");
+        iedSqNumText = AddDataRow(panel.transform, "GOOSE sqNum", "0");
+        iedAttackText = AddDataRow(panel.transform, "Security", "No attack");
+        iedLastGooseText = AddBlockRow(panel.transform, "Last GOOSE Message", "GOOSE idle", 62f);
+    }
+
+    void BuildBreakerPanel(RectTransform parent)
+    {
+        GameObject panel = CreateTitledLayoutPanel(parent, "BreakerPanel", "CIRCUIT BREAKER XCBR1", new Vector2(0f, 0.315f), new Vector2(1f, 0.475f));
+
+        GameObject row = CreateUI("BreakerStateRow", panel.transform);
+        AddLayout(row, -1f, 44f).flexibleWidth = 1f;
+        HorizontalLayoutGroup layout = row.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 12;
+        layout.childAlignment = TextAnchor.MiddleLeft;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+
+        breakerStateIndicator = CreateIndicator(row.transform, "BreakerStateLamp", SCADAHMIController.NormalColor, 24f);
+        breakerStateText = CreateTMP("BreakerStateText", row.transform, "CLOSED", 25, SCADAHMIController.NormalColor, FontStyles.Bold);
+        breakerStateText.alignment = TextAlignmentOptions.MidlineLeft;
+        AddLayout(breakerStateText.gameObject, -1f, 40f).flexibleWidth = 1f;
+
+        breakerDetailText = AddBlockRow(panel.transform, "Operation", "Initial closed state", 38f);
+    }
+
+    void BuildAlarmPanel(RectTransform parent)
+    {
+        GameObject panel = CreateTitledLayoutPanel(parent, "AlarmPanel", "ALARM PANEL", Vector2.zero, new Vector2(1f, 0.30f));
+
+        GameObject countRow = CreateUI("AlarmCountRow", panel.transform);
+        AddLayout(countRow, -1f, 24f).flexibleWidth = 1f;
+        HorizontalLayoutGroup countLayout = countRow.AddComponent<HorizontalLayoutGroup>();
+        countLayout.childAlignment = TextAnchor.MiddleLeft;
+        countLayout.childControlWidth = true;
+        countLayout.childControlHeight = true;
+        countLayout.childForceExpandWidth = false;
+        countLayout.childForceExpandHeight = false;
+
+        TMP_Text label = CreateTMP("AlarmCountLabel", countRow.transform, "Active alarms", 12, ColDim);
+        AddLayout(label.gameObject, -1f, 22f).flexibleWidth = 1f;
+
+        alarmCountText = CreateTMP("AlarmCount", countRow.transform, "0", 18, ColAccent, FontStyles.Bold);
+        alarmCountText.alignment = TextAlignmentOptions.MidlineRight;
+        AddLayout(alarmCountText.gameObject, 42f, 22f);
+
+        alarmListText = CreateTMP("AlarmList", panel.transform, "<color=#728087>No active alarms</color>", 12, ColText);
+        alarmListText.richText = true;
+        alarmListText.enableWordWrapping = true;
+        alarmListText.overflowMode = TextOverflowModes.Truncate;
+        LayoutElement alarmLayout = AddLayout(alarmListText.gameObject, -1f, 130f);
+        alarmLayout.flexibleWidth = 1f;
+        alarmLayout.flexibleHeight = 1f;
+    }
+
+    GameObject CreateTitledLayoutPanel(RectTransform parent, string name, string title, Vector2 anchorMin, Vector2 anchorMax)
+    {
+        GameObject panel = CreatePanel(name, parent, ColPanel);
+        RectTransform rt = panel.GetComponent<RectTransform>();
+        SetAnchors(rt, anchorMin, anchorMax, Vector2.zero, Vector2.zero);
+        AddOutline(panel, new Color(ColLine.r, ColLine.g, ColLine.b, 0.20f), new Vector2(1f, -1f));
+
+        VerticalLayoutGroup layout = panel.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(16, 16, 10, 12);
+        layout.spacing = 7;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+
+        TMP_Text header = CreateTMP("PanelTitle", panel.transform, title, 14, ColAccent, FontStyles.Bold);
+        header.alignment = TextAlignmentOptions.MidlineLeft;
+        AddLayout(header.gameObject, -1f, 24f).flexibleWidth = 1f;
+        return panel;
+    }
+
+    TMP_Text AddDataRow(Transform parent, string labelText, string valueText)
+    {
+        GameObject row = CreateUI(labelText.Replace(" ", "") + "Row", parent);
+        AddLayout(row, -1f, 28f).flexibleWidth = 1f;
+        HorizontalLayoutGroup layout = row.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 8;
+        layout.childAlignment = TextAnchor.MiddleLeft;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+
+        TMP_Text label = CreateTMP("Label", row.transform, labelText, 12, ColDim);
+        label.alignment = TextAlignmentOptions.MidlineLeft;
+        AddLayout(label.gameObject, 150f, 24f);
+
+        TMP_Text value = CreateTMP("Value", row.transform, valueText, 13, ColText, FontStyles.Bold);
+        value.alignment = TextAlignmentOptions.MidlineRight;
+        AddLayout(value.gameObject, -1f, 24f).flexibleWidth = 1f;
+        return value;
+    }
+
+    TMP_Text AddBlockRow(Transform parent, string labelText, string valueText, float height)
+    {
+        GameObject block = CreateUI(labelText.Replace(" ", "") + "Block", parent);
+        AddImage(block, new Color(0.020f, 0.028f, 0.036f, 0.95f));
+        AddLayout(block, -1f, height).flexibleWidth = 1f;
+
+        VerticalLayoutGroup layout = block.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(10, 10, 5, 5);
+        layout.spacing = 2;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+
+        TMP_Text label = CreateTMP("Label", block.transform, labelText, 10, ColDim);
+        AddLayout(label.gameObject, -1f, 16f).flexibleWidth = 1f;
+
+        TMP_Text value = CreateTMP("Value", block.transform, valueText, 12, ColText, FontStyles.Bold);
+        value.enableWordWrapping = true;
+        value.overflowMode = TextOverflowModes.Truncate;
+        AddLayout(value.gameObject, -1f, height - 24f).flexibleWidth = 1f;
+        return value;
+    }
+
+    void BuildConsole(RectTransform parent)
+    {
+        GameObject console = CreatePanel("ConsolePanel", parent, ColPanelDark);
+        RectTransform consoleRT = console.GetComponent<RectTransform>();
+        SetAnchors(consoleRT, Vector2.zero, new Vector2(1f, 0.305f), new Vector2(16f, 14f), new Vector2(-16f, -6f));
+        AddOutline(console, new Color(ColAccent.r, ColAccent.g, ColAccent.b, 0.20f), new Vector2(1f, -1f));
+
+        GameObject titleRow = CreateUI("ConsoleTitleRow", console.transform);
+        RectTransform titleRT = titleRow.GetComponent<RectTransform>();
+        SetAnchors(titleRT, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(14f, 0f), new Vector2(-14f, 0f));
+        titleRT.pivot = new Vector2(0.5f, 1f);
+        titleRT.sizeDelta = new Vector2(0f, 34f);
+
+        TMP_Text title = CreateTMP("ConsoleTitle", titleRow.transform, "SCADA Terminal / Command Console", 14, ColAccent, FontStyles.Bold);
+        title.alignment = TextAlignmentOptions.MidlineLeft;
+        SetAnchors(title.rectTransform, Vector2.zero, new Vector2(0.42f, 1f), Vector2.zero, Vector2.zero);
+
+        statusBarText = CreateTMP("StatusBar", titleRow.transform, "IEC 61850 station bus ready", 12, ColDim);
+        statusBarText.alignment = TextAlignmentOptions.MidlineRight;
+        SetAnchors(statusBarText.rectTransform, new Vector2(0.42f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+
+        BuildOutputScroll(console.transform);
+        BuildInputRow(console.transform);
+    }
+
+    void BuildOutputScroll(Transform parent)
+    {
+        GameObject scrollGO = CreateUI("OutputPanel", parent);
+        RectTransform scrollRT = scrollGO.GetComponent<RectTransform>();
+        SetAnchors(scrollRT, Vector2.zero, Vector2.one, new Vector2(12f, 58f), new Vector2(-12f, -38f));
+        AddImage(scrollGO, new Color(0.014f, 0.021f, 0.026f, 0.98f));
+
+        outputScrollRect = scrollGO.AddComponent<ScrollRect>();
+        outputScrollRect.horizontal = false;
+        outputScrollRect.vertical = true;
+        outputScrollRect.movementType = ScrollRect.MovementType.Clamped;
+
+        GameObject viewport = CreateUI("Viewport", scrollGO.transform);
+        RectTransform viewportRT = viewport.GetComponent<RectTransform>();
+        SetAnchors(viewportRT, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        Image viewportImage = AddImage(viewport, new Color(0f, 0f, 0f, 0.01f));
+        Mask mask = viewport.AddComponent<Mask>();
+        mask.showMaskGraphic = false;
+        viewportImage.raycastTarget = false;
+
+        GameObject content = CreateUI("Content", viewport.transform);
+        RectTransform contentRT = content.GetComponent<RectTransform>();
+        contentRT.anchorMin = new Vector2(0f, 1f);
+        contentRT.anchorMax = new Vector2(1f, 1f);
+        contentRT.pivot = new Vector2(0.5f, 1f);
+        contentRT.anchoredPosition = Vector2.zero;
+        contentRT.sizeDelta = new Vector2(0f, 220f);
+
+        outputText = CreateTMP("OutputText", content.transform, "", 13, ColText);
+        outputText.richText = true;
+        outputText.enableWordWrapping = true;
+        outputText.overflowMode = TextOverflowModes.Overflow;
+        outputText.alignment = TextAlignmentOptions.TopLeft;
+        outputText.lineSpacing = 2f;
+        outputText.margin = new Vector4(12f, 10f, 12f, 10f);
+        SetAnchors(outputText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        outputScrollRect.viewport = viewportRT;
+        outputScrollRect.content = contentRT;
+    }
+
+    void BuildInputRow(Transform parent)
+    {
+        GameObject row = CreateUI("InputArea", parent);
+        RectTransform rowRT = row.GetComponent<RectTransform>();
+        SetAnchors(rowRT, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(12f, 10f), new Vector2(-12f, 0f));
         rowRT.pivot = new Vector2(0.5f, 0f);
-        rowRT.anchoredPosition = Vector2.zero;
-        rowRT.sizeDelta = new Vector2(0f, 72f);
+        rowRT.sizeDelta = new Vector2(0f, 42f);
 
-        var prompt = CreateTMP("Prompt", row.transform, "scada>", 20, COL_ACCENT, FontStyles.Bold);
+        TMP_Text prompt = CreateTMP("Prompt", row.transform, "scada>", 15, ColAccent, FontStyles.Bold);
         prompt.alignment = TextAlignmentOptions.MidlineLeft;
-        var promptRT = prompt.GetComponent<RectTransform>();
-        promptRT.anchorMin = new Vector2(0f, 0f);
-        promptRT.anchorMax = new Vector2(0f, 1f);
-        promptRT.pivot = new Vector2(0f, 0.5f);
-        promptRT.anchoredPosition = new Vector2(24f, 0f);
-        promptRT.sizeDelta = new Vector2(86f, 0f);
+        SetAnchors(prompt.rectTransform, Vector2.zero, new Vector2(0f, 1f), Vector2.zero, Vector2.zero);
+        prompt.rectTransform.pivot = new Vector2(0f, 0.5f);
+        prompt.rectTransform.anchoredPosition = new Vector2(0f, 0f);
+        prompt.rectTransform.sizeDelta = new Vector2(84f, 0f);
 
-        var ifGO = CreateUI("TerminalInput", row.transform);
-        var ifRT = ifGO.GetComponent<RectTransform>();
-        ifRT.anchorMin = new Vector2(0f, 0f);
-        ifRT.anchorMax = new Vector2(1f, 1f);
-        ifRT.offsetMin = new Vector2(120f, 0f);
-        ifRT.offsetMax = new Vector2(-148f, 0f);
-        var ifImg = AddImage(ifGO, new Color(0.055f, 0.065f, 0.075f, 1f));
+        GameObject inputGO = CreateUI("TerminalInput", row.transform);
+        RectTransform inputRT = inputGO.GetComponent<RectTransform>();
+        SetAnchors(inputRT, Vector2.zero, Vector2.one, new Vector2(88f, 0f), new Vector2(-132f, 0f));
+        Image inputImage = AddImage(inputGO, ColInput);
 
-        var inputField = ifGO.AddComponent<TMP_InputField>();
+        inputField = inputGO.AddComponent<TMP_InputField>();
+        inputField.lineType = TMP_InputField.LineType.SingleLine;
+        inputField.targetGraphic = inputImage;
+        inputField.caretColor = ColAccent;
+        inputField.selectionColor = new Color(ColAccent.r, ColAccent.g, ColAccent.b, 0.25f);
+        inputField.pointSize = 14f;
 
-        var textArea = CreateUI("Text Area", ifGO.transform);
-        var taRT = textArea.GetComponent<RectTransform>();
-        taRT.anchorMin = Vector2.zero;
-        taRT.anchorMax = Vector2.one;
-        taRT.offsetMin = new Vector2(14, 6);
-        taRT.offsetMax = new Vector2(-14, -6);
+        GameObject textArea = CreateUI("Text Area", inputGO.transform);
+        RectTransform textAreaRT = textArea.GetComponent<RectTransform>();
+        SetAnchors(textAreaRT, Vector2.zero, Vector2.one, new Vector2(10f, 4f), new Vector2(-10f, -4f));
+        textArea.AddComponent<RectMask2D>();
 
-        var ph = CreateTMP("Placeholder", textArea.transform,
-            "komut girin: help, status, scan, attack fdi temp", 18, COL_DIM);
-        ph.alignment = TextAlignmentOptions.MidlineLeft;
-        var phRT = ph.GetComponent<RectTransform>();
-        phRT.anchorMin = Vector2.zero;
-        phRT.anchorMax = Vector2.one;
-        phRT.offsetMin = Vector2.zero;
-        phRT.offsetMax = Vector2.zero;
+        TMP_Text placeholder = CreateTMP("Placeholder", textArea.transform, "status, fault on, trip, reset, attack goose_data", 13, ColDim);
+        placeholder.alignment = TextAlignmentOptions.MidlineLeft;
+        SetAnchors(placeholder.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        var itxt = CreateTMP("Text", textArea.transform, "", 18, COL_TEXT);
-        itxt.alignment = TextAlignmentOptions.MidlineLeft;
-        var itRT = itxt.GetComponent<RectTransform>();
-        itRT.anchorMin = Vector2.zero;
-        itRT.anchorMax = Vector2.one;
-        itRT.offsetMin = Vector2.zero;
-        itRT.offsetMax = Vector2.zero;
+        TMP_Text inputText = CreateTMP("Text", textArea.transform, "", 13, ColText);
+        inputText.alignment = TextAlignmentOptions.MidlineLeft;
+        SetAnchors(inputText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        inputField.textViewport = taRT;
-        inputField.textComponent = itxt;
-        inputField.placeholder = ph;
+        inputField.textViewport = textAreaRT;
+        inputField.textComponent = inputText;
+        inputField.placeholder = placeholder;
         inputField.fontAsset = TMP_Settings.defaultFontAsset;
-        inputField.pointSize = 18;
-        inputField.caretColor = COL_ACCENT;
-        inputField.selectionColor = new Color(COL_ACCENT.r, COL_ACCENT.g, COL_ACCENT.b, 0.25f);
-        inputField.targetGraphic = ifImg;
 
-        var sendGO = CreateUI("SendButton", row.transform);
-        var sendRT = sendGO.GetComponent<RectTransform>();
-        sendRT.anchorMin = new Vector2(1f, 0f);
-        sendRT.anchorMax = new Vector2(1f, 1f);
-        sendRT.pivot = new Vector2(1f, 0.5f);
-        sendRT.anchoredPosition = new Vector2(-20f, 0f);
-        sendRT.sizeDelta = new Vector2(124f, 0f);
-        var sendImg = AddImage(sendGO, COL_BTN_SEND);
-        var sendBtn = sendGO.AddComponent<Button>();
-        sendBtn.targetGraphic = sendImg;
-        var sc = sendBtn.colors;
-        sc.highlightedColor = new Color(0f, 0.75f, 0.63f, 1f);
-        sc.pressedColor = new Color(0f, 0.5f, 0.42f, 1f);
-        sendBtn.colors = sc;
-        var sendLabel = CreateTMP("SendLabel", sendGO.transform, "CALISTIR", 15, Color.white,
-            FontStyles.Bold, TextAlignmentOptions.Center);
-        Stretch(sendLabel.GetComponent<RectTransform>());
+        GameObject buttonGO = CreateUI("SendButton", row.transform);
+        RectTransform buttonRT = buttonGO.GetComponent<RectTransform>();
+        SetAnchors(buttonRT, new Vector2(1f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        buttonRT.pivot = new Vector2(1f, 0.5f);
+        buttonRT.anchoredPosition = Vector2.zero;
+        buttonRT.sizeDelta = new Vector2(118f, 0f);
+        Image buttonImage = AddImage(buttonGO, new Color(0.04f, 0.62f, 0.45f, 1f));
 
-        return row;
+        sendButton = buttonGO.AddComponent<Button>();
+        sendButton.targetGraphic = buttonImage;
+        ColorBlock colors = sendButton.colors;
+        colors.highlightedColor = new Color(0.02f, 0.75f, 0.58f, 1f);
+        colors.pressedColor = new Color(0.02f, 0.45f, 0.36f, 1f);
+        sendButton.colors = colors;
+
+        TMP_Text label = CreateTMP("SendLabel", buttonGO.transform, "RUN", 13, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
+        SetAnchors(label.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
     }
 
-    // ─── STATUS BAR ────────────────────────────────────────────
-RectTransform BuildStatusBar(RectTransform parent)
+    GameObject BuildWarningPanel(RectTransform parent)
     {
-        var go = CreateUI("StatusBarArea", parent);
-        AddImage(go, COL_STATUS);
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0f, 0f);
-        rt.anchorMax = new Vector2(1f, 0f);
-        rt.pivot = new Vector2(0.5f, 0f);
-        rt.anchoredPosition = new Vector2(0f, 73f);
-        rt.sizeDelta = new Vector2(0f, 40f);
-
-        var hl = go.AddComponent<HorizontalLayoutGroup>();
-        hl.padding = new RectOffset(20, 20, 4, 4);
-        hl.childControlWidth = false;
-        hl.childControlHeight = false;
-        hl.childForceExpandWidth = false;
-        hl.childForceExpandHeight = false;
-
-        var stxt = CreateTMP("StatusBar", go.transform,
-            "TEMP -- C  |  VOLT -- kV  |  LOAD -- %  |  MQTT BEKLENIYOR", 14, COL_DIM);
-        var statusLE = AddLE(stxt.gameObject, -1, 32);
-        statusLE.flexibleWidth = 1;
-
-        return go.GetComponent<RectTransform>();
-    }
-
-    // ─── WARNING PANEL ─────────────────────────────────────────
-GameObject BuildWarningPanel(RectTransform parent)
-    {
-        var go = CreateUI("WarningPanel", parent);
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0, 1);
-        rt.anchorMax = new Vector2(1, 1);
+        GameObject panel = CreatePanel("WarningPanel", parent, ColWarning);
+        RectTransform rt = panel.GetComponent<RectTransform>();
+        SetAnchors(rt, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(44f, 0f), new Vector2(-44f, 0f));
         rt.pivot = new Vector2(0.5f, 1f);
-        rt.anchoredPosition = new Vector2(0, -68);
-        rt.sizeDelta = new Vector2(-64, 54);
+        rt.anchoredPosition = new Vector2(0f, -70f);
+        rt.sizeDelta = new Vector2(0f, 44f);
 
-        AddImage(go, COL_WARN_BG);
-        go.AddComponent<Outline>().effectColor = new Color(1, 0.3f, 0.3f, 0.5f);
+        TMP_Text text = CreateTMP("WarningText", panel.transform, "", 15, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
+        SetAnchors(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(10f, 0f), new Vector2(-10f, 0f));
 
-        var hl = go.AddComponent<HorizontalLayoutGroup>();
-        hl.padding = new RectOffset(18, 18, 7, 7);
-        hl.childAlignment = TextAnchor.MiddleCenter;
+        panel.SetActive(false);
+        return panel;
+    }
 
-        CreateTMP("WarningText", go.transform, "", 17, Color.white, FontStyles.Bold,
-            TextAlignmentOptions.Center);
+    void WireComponents()
+    {
+        IEDController ied = gameObject.GetComponent<IEDController>() ?? gameObject.AddComponent<IEDController>();
+        CircuitBreakerController breaker = gameObject.GetComponent<CircuitBreakerController>() ?? gameObject.AddComponent<CircuitBreakerController>();
+        AlarmPanelController alarms = gameObject.GetComponent<AlarmPanelController>() ?? gameObject.AddComponent<AlarmPanelController>();
+        SCADAHMIController hmi = gameObject.GetComponent<SCADAHMIController>() ?? gameObject.AddComponent<SCADAHMIController>();
+        SCADATerminalController scadaTerminal = gameObject.GetComponent<SCADATerminalController>() ?? gameObject.AddComponent<SCADATerminalController>();
+        TerminalController legacyTerminal = gameObject.GetComponent<TerminalController>() ?? gameObject.AddComponent<TerminalController>();
 
-        go.SetActive(false);
+        hmi.iedController = ied;
+        hmi.circuitBreaker = breaker;
+        hmi.alarmPanel = alarms;
+        hmi.terminalController = scadaTerminal;
+        hmi.componentBindings = componentBindings;
+        hmi.systemModeText = systemModeText;
+        hmi.protocolText = protocolText;
+        hmi.clockText = clockText;
+        hmi.iedCurrentText = iedCurrentText;
+        hmi.iedThresholdText = iedThresholdText;
+        hmi.iedTripStatusText = iedTripStatusText;
+        hmi.iedStNumText = iedStNumText;
+        hmi.iedSqNumText = iedSqNumText;
+        hmi.iedLastGooseText = iedLastGooseText;
+        hmi.iedAttackText = iedAttackText;
+        hmi.breakerStateText = breakerStateText;
+        hmi.breakerDetailText = breakerDetailText;
+        hmi.breakerStateIndicator = breakerStateIndicator;
+
+        ied.currentText = iedCurrentText;
+        ied.thresholdText = iedThresholdText;
+        ied.tripStatusText = iedTripStatusText;
+        ied.stNumText = iedStNumText;
+        ied.sqNumText = iedSqNumText;
+        ied.lastGooseText = iedLastGooseText;
+        ied.attackStatusText = iedAttackText;
+        ied.iedIndicator = iedIndicator;
+
+        breaker.stateText = breakerStateText;
+        breaker.detailText = breakerDetailText;
+        breaker.stateIndicator = breakerStateIndicator;
+        breaker.mimicIndicator = breakerMimicIndicator;
+
+        alarms.alarmListText = alarmListText;
+        alarms.alarmCountText = alarmCountText;
+
+        scadaTerminal.hmiController = hmi;
+        scadaTerminal.legacyTerminal = legacyTerminal;
+        scadaTerminal.outputText = outputText;
+        scadaTerminal.inputField = inputField;
+        scadaTerminal.sendButton = sendButton;
+
+        legacyTerminal.OutputText = outputText;
+        legacyTerminal.InputField = inputField;
+        legacyTerminal.StatusBar = statusBarText;
+        legacyTerminal.WarningPanel = warningPanel;
+        legacyTerminal.SendButton = sendButton;
+        legacyTerminal.scadaTerminalController = scadaTerminal;
+
+        TerminalPencereYonetici windowManager = gameObject.GetComponent<TerminalPencereYonetici>() ?? gameObject.AddComponent<TerminalPencereYonetici>();
+        windowManager.terminalPencere = terminalWindow;
+        windowManager.icerikAlani = bodyArea;
+        windowManager.durumCubugu = statusBarText != null ? statusBarText.gameObject : null;
+        windowManager.uyariPaneli = warningPanel;
+
+        if (minButton != null)
+            minButton.onClick.AddListener(windowManager.KucultButonTiklandi);
+        if (toggleButton != null)
+            toggleButton.onClick.AddListener(windowManager.ToggleButonTiklandi);
+
+        hmi.RefreshAll();
+    }
+
+    Button CreateTitleButton(Transform parent, string name, string label)
+    {
+        GameObject go = CreateUI(name, parent);
+        Image image = AddImage(go, new Color(0.10f, 0.13f, 0.16f, 1f));
+        AddLayout(go, 34f, 30f);
+        Button button = go.AddComponent<Button>();
+        button.targetGraphic = image;
+
+        ColorBlock colors = button.colors;
+        colors.highlightedColor = new Color(0.20f, 0.24f, 0.28f, 1f);
+        colors.pressedColor = new Color(0.08f, 0.10f, 0.12f, 1f);
+        button.colors = colors;
+
+        TMP_Text text = CreateTMP("Label", go.transform, label, 16, ColText, FontStyles.Bold, TextAlignmentOptions.Center);
+        SetAnchors(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        return button;
+    }
+
+    void AddLine(RectTransform parent, string name, Vector2 start, Vector2 end, float thickness, Color color)
+    {
+        GameObject line = CreateUI(name, parent);
+        AddImage(line, color);
+        RectTransform rt = line.GetComponent<RectTransform>();
+
+        Vector2 delta = end - start;
+        Vector2 mid = (start + end) * 0.5f;
+        rt.anchorMin = mid;
+        rt.anchorMax = mid;
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = Vector2.zero;
+        rt.sizeDelta = new Vector2(delta.magnitude * 1000f, thickness);
+        rt.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg);
+    }
+
+    Image CreateIndicator(Transform parent, string name, Color color, float size)
+    {
+        GameObject indicatorGO = CreateUI(name, parent);
+        Image indicator = AddImage(indicatorGO, color);
+        AddLayout(indicatorGO, size, size);
+        RectTransform rt = indicatorGO.GetComponent<RectTransform>();
+        rt.sizeDelta = new Vector2(size, size);
+        return indicator;
+    }
+
+    void AddRectBorder(GameObject target, Color color, float thickness)
+    {
+        RectTransform parent = target.GetComponent<RectTransform>();
+        AddBorderSegment(parent, "BorderTop", new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, -thickness), Vector2.zero, thickness, true, color);
+        AddBorderSegment(parent, "BorderBottom", Vector2.zero, new Vector2(1f, 0f), Vector2.zero, new Vector2(0f, thickness), thickness, true, color);
+        AddBorderSegment(parent, "BorderLeft", Vector2.zero, new Vector2(0f, 1f), Vector2.zero, new Vector2(thickness, 0f), thickness, false, color);
+        AddBorderSegment(parent, "BorderRight", new Vector2(1f, 0f), Vector2.one, new Vector2(-thickness, 0f), Vector2.zero, thickness, false, color);
+    }
+
+    void AddBorderSegment(
+        RectTransform parent,
+        string name,
+        Vector2 anchorMin,
+        Vector2 anchorMax,
+        Vector2 offsetMin,
+        Vector2 offsetMax,
+        float thickness,
+        bool horizontal,
+        Color color)
+    {
+        GameObject segment = CreateUI(name, parent);
+        Image image = AddImage(segment, color);
+        image.raycastTarget = false;
+
+        LayoutElement layout = segment.AddComponent<LayoutElement>();
+        layout.ignoreLayout = true;
+
+        RectTransform rt = segment.GetComponent<RectTransform>();
+        rt.anchorMin = anchorMin;
+        rt.anchorMax = anchorMax;
+        rt.offsetMin = offsetMin;
+        rt.offsetMax = offsetMax;
+        if (horizontal)
+            rt.sizeDelta = new Vector2(0f, thickness);
+        else
+            rt.sizeDelta = new Vector2(thickness, 0f);
+    }
+
+    GameObject CreatePanel(string name, Transform parent, Color color)
+    {
+        GameObject go = CreateUI(name, parent);
+        AddImage(go, color);
         return go;
     }
 
-    // ─── WIRE COMPONENTS ───────────────────────────────────────
-void WireComponents(RectTransform window, RectTransform titleBar,
-        GameObject contentArea, ScrollRect scrollRect,
-        GameObject inputArea, RectTransform statusBar, GameObject warningPanel)
-    {
-        var tc = gameObject.GetComponent<TerminalController>() ?? gameObject.AddComponent<TerminalController>();
-        tc.OutputText = window.GetComponentInChildren<ScrollRect>()
-            ?.content?.GetComponentInChildren<TMP_Text>();
-        tc.InputField = inputArea.GetComponentInChildren<TMP_InputField>(true);
-        tc.StatusBar = statusBar.GetComponentInChildren<TMP_Text>();
-        tc.WarningPanel = warningPanel;
-        tc.SendButton = inputArea.GetComponentInChildren<Button>(true);
-
-        var tpy = gameObject.GetComponent<TerminalPencereYonetici>() ?? gameObject.AddComponent<TerminalPencereYonetici>();
-        tpy.terminalPencere = window;
-        tpy.icerikAlani = contentArea;
-        tpy.durumCubugu = statusBar.gameObject;
-        tpy.uyariPaneli = warningPanel;
-
-        var controls = titleBar.Find("WindowControls");
-        var minBtn = controls != null ? controls.Find("MinBtn")?.GetComponent<Button>() : titleBar.Find("MinBtn")?.GetComponent<Button>();
-        var maxBtn = controls != null ? controls.Find("MaxBtn")?.GetComponent<Button>() : titleBar.Find("MaxBtn")?.GetComponent<Button>();
-        if (minBtn != null)
-            minBtn.onClick.AddListener(() => tpy.KucultButonTiklandi());
-        if (maxBtn != null)
-            maxBtn.onClick.AddListener(() => tpy.ToggleButonTiklandi());
-    }
-
-    // ─── HELPERS ───────────────────────────────────────────────
     GameObject CreateUI(string name, Transform parent)
     {
-        var go = new GameObject(name, typeof(RectTransform));
+        GameObject go = new GameObject(name, typeof(RectTransform));
         go.transform.SetParent(parent, false);
-        go.layer = 5; // UI layer
+        go.layer = 5;
         return go;
     }
 
-    Image AddImage(GameObject go, Color c)
+    Image AddImage(GameObject go, Color color)
     {
-        var img = go.GetComponent<Image>() ?? go.AddComponent<Image>();
-        img.color = c;
-        return img;
+        Image image = go.GetComponent<Image>() ?? go.AddComponent<Image>();
+        image.color = color;
+        return image;
     }
 
-    LayoutElement AddLE(GameObject go, float w, float h)
+    Outline AddOutline(GameObject go, Color color, Vector2 distance)
     {
-        var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
-        if (w > 0) le.preferredWidth = w;
-        if (h > 0) le.preferredHeight = h;
-        return le;
+        Outline outline = go.GetComponent<Outline>() ?? go.AddComponent<Outline>();
+        outline.effectColor = color;
+        outline.effectDistance = distance;
+        return outline;
     }
 
-    void Stretch(RectTransform rt)
+    LayoutElement AddLayout(GameObject go, float preferredWidth, float preferredHeight)
     {
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.one;
-        rt.offsetMin = Vector2.zero;
-        rt.offsetMax = Vector2.zero;
+        LayoutElement element = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+        if (preferredWidth > 0f)
+        {
+            element.preferredWidth = preferredWidth;
+            element.minWidth = preferredWidth;
+        }
+        if (preferredHeight > 0f)
+        {
+            element.preferredHeight = preferredHeight;
+            element.minHeight = preferredHeight;
+        }
+
+        RectTransform rt = go.GetComponent<RectTransform>();
+        if (rt != null)
+        {
+            Vector2 size = rt.sizeDelta;
+            if (preferredWidth > 0f)
+                size.x = preferredWidth;
+            if (preferredHeight > 0f)
+                size.y = preferredHeight;
+            rt.sizeDelta = size;
+        }
+
+        return element;
     }
 
-    TMP_Text CreateTMP(string name, Transform parent, string text, float size,
-        Color color, FontStyles style = FontStyles.Normal,
-        TextAlignmentOptions align = TextAlignmentOptions.Left)
+    TMP_Text CreateTMP(
+        string name,
+        Transform parent,
+        string text,
+        float size,
+        Color color,
+        FontStyles style = FontStyles.Normal,
+        TextAlignmentOptions alignment = TextAlignmentOptions.Left)
     {
-        var go = CreateUI(name, parent);
-        go.AddComponent<CanvasRenderer>();
-        var tmp = go.AddComponent<TextMeshProUGUI>();
+        GameObject go = CreateUI(name, parent);
+        TextMeshProUGUI tmp = go.AddComponent<TextMeshProUGUI>();
         tmp.text = text;
         tmp.fontSize = size;
         tmp.color = color;
         tmp.fontStyle = style;
-        tmp.alignment = align;
+        tmp.alignment = alignment;
         tmp.enableWordWrapping = false;
         tmp.overflowMode = TextOverflowModes.Overflow;
+        tmp.richText = true;
+        tmp.font = TMP_Settings.defaultFontAsset;
         return tmp;
+    }
+
+    void SetAnchors(RectTransform rt, Vector2 min, Vector2 max, Vector2 offsetMin, Vector2 offsetMax)
+    {
+        rt.anchorMin = min;
+        rt.anchorMax = max;
+        rt.offsetMin = offsetMin;
+        rt.offsetMax = offsetMax;
     }
 }

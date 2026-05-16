@@ -15,6 +15,9 @@ public class TerminalController : MonoBehaviour
     
     [Header("MQTT")]
     public SimpleMQTTReceiver mqttReceiver;
+
+    [Header("SCADA/HMI")]
+    public SCADATerminalController scadaTerminalController;
     
     private List<string> history = new List<string>();
     private readonly List<string> outputLines = new List<string>();
@@ -70,6 +73,9 @@ void FindElements()
         if (mqttReceiver == null)
             mqttReceiver = FindFirstObjectByType<SimpleMQTTReceiver>();
 
+        if (scadaTerminalController == null)
+            scadaTerminalController = GetComponent<SCADATerminalController>() ?? FindFirstObjectByType<SCADATerminalController>();
+
         if (OutputText != null)
             scrollRect = OutputText.GetComponentInParent<ScrollRect>();
     }
@@ -124,7 +130,7 @@ void InitializeTerminal()
         WriteLine("Rol     : Operator konsolu, siber olay simülasyonu ve telemetri izleme");
         WriteLine("----------------------------------------------------------------");
         WriteLine("Komut listesi icin <color=#0FD19E>help</color> yazin.");
-        WriteLine("Onerilen akis: <color=#B9FBCB>status</color> -> <color=#B9FBCB>scan</color> -> <color=#B9FBCB>attack fdi temp</color> -> <color=#B9FBCB>stop</color>");
+        WriteLine("Onerilen akis: <color=#B9FBCB>status</color> -> <color=#B9FBCB>fault on</color> -> <color=#B9FBCB>reset</color> -> <color=#B9FBCB>attack goose_data</color>");
         WriteLine("");
 
         if (WarningPanel != null)
@@ -152,6 +158,13 @@ void OnCommand(string command)
     void ProcessCommand(string cmd)
     {
         string[] parts = cmd.Split(' ');
+
+        if (scadaTerminalController != null &&
+            scadaTerminalController.TryProcessCommand(cmd, WriteLine, ClearTerminal))
+        {
+            UpdateStatusBar();
+            return;
+        }
         
         switch (parts[0])
         {
