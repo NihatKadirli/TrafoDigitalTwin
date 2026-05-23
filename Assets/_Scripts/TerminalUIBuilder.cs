@@ -665,6 +665,7 @@ public class TerminalUIBuilder : MonoBehaviour
         windowManager.icerikAlani = bodyArea;
         windowManager.durumCubugu = statusBarText != null ? statusBarText.gameObject : null;
         windowManager.uyariPaneli = warningPanel;
+        breakerScenario.terminalWindowManager = windowManager;
 
         if (minButton != null)
             minButton.onClick.AddListener(windowManager.KucultButonTiklandi);
