@@ -16,6 +16,25 @@ public class SimpleMQTTReceiver : MonoBehaviour
     public Text loadText;             // Yük göstergesi
     public Text statusText;           // Durum göstergesi
     public GameObject alarmPanel;     // Alarm paneli
+    public AlarmPanelController alarmPanelController;
+
+    [Header("Transformer Thermal Digital Twin")]
+    public Renderer transformerRenderer;
+    public Renderer[] transformerRenderers;
+    public Color normalColor = Color.white;
+    public Color warningColor = new Color(1f, 0.78f, 0.12f, 1f);
+    public Color criticalColor = new Color(1f, 0.18f, 0.08f, 1f);
+    public Color failureColor = new Color(0.22f, 0.02f, 0.02f, 1f);
+    public float warningThreshold = 70f;
+    public float criticalThreshold = 85f;
+    public float smokeThreshold = 100f;
+    public float failureThreshold = 110f;
+    public ParticleSystem smokeParticle;
+    public AudioSource sirenAudioSource;
+    public Light alarmLight;
+    public GameObject explosionEffect;
+    public Camera cameraShake;
+    public float cameraShakeAmount = 0.08f;
     
     [Header("MQTT Settings")]
     public string brokerAddress = "localhost";
@@ -31,6 +50,8 @@ public class SimpleMQTTReceiver : MonoBehaviour
     
     // Son alinan veriler
     private float lastTemperature = 72f;
+    private float lastDisplayedTemperature = 72f;
+    private float lastRealTemperature = 72f;
     private float lastOilTemperature = 60f;
     private float lastVoltage = 154f;
     private float lastSecondaryVoltage = 34.5f;
@@ -49,6 +70,12 @@ private string lastRawJson = "";
     private string attackType = "";
     private float attackValue = 0;
     private bool dataLossSimulated = false;
+    private bool telemetryAttackActive = false;
+    private string telemetryAttackType = "";
+    private string telemetryStatus = "NORMAL";
+    private string lastThermalStatus = "";
+    private Vector3 originalCameraPosition;
+    private bool hasCameraOriginalPosition = false;
     
     void Start()
     {
@@ -61,6 +88,8 @@ private string lastRawJson = "";
             loadText = GameObject.Find("LoadValue")?.GetComponent<Text>();
         if (statusText == null)
             statusText = GameObject.Find("StatusValue")?.GetComponent<Text>();
+        if (alarmPanelController == null)
+            alarmPanelController = GetComponent<AlarmPanelController>() ?? FindFirstObjectByType<AlarmPanelController>();
         
         // MQTT bağlantısını başlat
         ConnectToMQTT();
@@ -71,6 +100,8 @@ private string lastRawJson = "";
         
         // Son mesaj zamanını başlat
         lastMessageTime = Time.time;
+        CaptureCameraPosition();
+        ApplyThermalEffects();
         
         Debug.Log("SimpleMQTTReceiver Başlatıldı - Saldırı simülasyonu için hazır");
     }
@@ -288,16 +319,25 @@ void ParseSensorData(string jsonData)
 
             if (!isUnderAttack)
             {
-                lastTemperature = data.sicaklik;
+                float displayedTemp = data.displayedTemperature > 0f ? data.displayedTemperature : data.sicaklik;
+                float realTemp = data.realTemperature > 0f ? data.realTemperature : displayedTemp;
+
+                lastTemperature = displayedTemp;
+                lastDisplayedTemperature = displayedTemp;
+                lastRealTemperature = realTemp;
                 lastOilTemperature = data.yag_sicaklik;
                 lastVoltage = data.gerilim_primer / 1000f;
                 lastSecondaryVoltage = data.gerilim_sekonder / 1000f;
                 lastPrimaryCurrent = data.akim_primer;
                 lastSecondaryCurrent = data.akim_sekonder;
                 lastLoad = data.yuk_seviyesi;
+                telemetryAttackActive = data.attackActive;
+                telemetryAttackType = string.IsNullOrEmpty(data.attackType) ? "" : data.attackType;
+                telemetryStatus = string.IsNullOrEmpty(data.status) ? GetThermalStatus(realTemp) : data.status;
             }
 
             UpdateUI();
+            ApplyThermalEffects();
         }
         catch (Exception e)
         {
@@ -308,17 +348,16 @@ void ParseSensorData(string jsonData)
     void UpdateUI()
     {
         // Sıcaklık güncelle (saldırı altındaysa sahte değeri göster)
-        float displayTemp = isUnderAttack && attackType == "temperature" ? attackValue : lastTemperature;
+        float displayTemp = isUnderAttack && attackType == "temperature" ? attackValue : lastDisplayedTemperature;
         
         if (temperatureText != null)
         {
             temperatureText.text = $"{displayTemp:F1}°C";
-            if (displayTemp > 85)
+            if (lastRealTemperature > criticalThreshold)
             {
                 temperatureText.color = Color.red;
-                ShowAlarm("🔥 KRİTİK SICAKLIK!");
             }
-            else if (displayTemp > 70)
+            else if (lastRealTemperature > warningThreshold)
             {
                 temperatureText.color = Color.yellow;
             }
@@ -367,7 +406,12 @@ void ParseSensorData(string jsonData)
         // Status text güncelle (saldırı durumu)
         if (statusText != null)
         {
-            if (isUnderAttack)
+            if (telemetryAttackActive)
+            {
+                statusText.text = $"FDI AKTIF: SCADA {lastDisplayedTemperature:F1} C | GERCEK {lastRealTemperature:F1} C";
+                statusText.color = Color.red;
+            }
+            else if (isUnderAttack)
             {
                 if (attackType == "dos")
                     statusText.text = "⚠️ DoS SALDIRISI ALTINDA!";
@@ -380,6 +424,173 @@ void ParseSensorData(string jsonData)
                 statusText.text = isConnected ? "✅ Normal Çalışıyor" : "❌ Bağlantı Yok";
                 statusText.color = isConnected ? Color.green : Color.red;
             }
+        }
+    }
+
+    void ApplyThermalEffects()
+    {
+        string status = GetThermalStatus(lastRealTemperature);
+        bool smokeActive = lastRealTemperature > smokeThreshold;
+        bool failureActive = lastRealTemperature > failureThreshold;
+
+        ApplyTransformerColor(status);
+        ApplySmoke(smokeActive);
+        ApplyFailureEffects(failureActive);
+        RaiseAlarmForStatus(status);
+        lastThermalStatus = status;
+    }
+
+    string GetThermalStatus(float realTemp)
+    {
+        if (realTemp > failureThreshold)
+            return "FAILURE";
+        if (realTemp > smokeThreshold)
+            return "SMOKE";
+        if (realTemp > criticalThreshold)
+            return "CRITICAL";
+        if (realTemp > warningThreshold)
+            return "WARNING";
+        return "NORMAL";
+    }
+
+    void ApplyTransformerColor(string status)
+    {
+        Color targetColor = normalColor;
+        if (status == "WARNING")
+            targetColor = warningColor;
+        else if (status == "CRITICAL" || status == "SMOKE")
+            targetColor = criticalColor;
+        else if (status == "FAILURE")
+            targetColor = failureColor;
+
+        if (transformerRenderer != null)
+            ApplyMaterialColor(transformerRenderer, targetColor);
+
+        if (transformerRenderers == null)
+            return;
+
+        foreach (Renderer targetRenderer in transformerRenderers)
+        {
+            if (targetRenderer != null)
+                ApplyMaterialColor(targetRenderer, targetColor);
+        }
+    }
+
+    void ApplyMaterialColor(Renderer targetRenderer, Color color)
+    {
+        Material material = targetRenderer.material;
+        if (material == null)
+            return;
+
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", color);
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", color);
+        if (material.HasProperty("_EmissionColor"))
+        {
+            Color emission = color * (color == normalColor ? 0f : 0.65f);
+            material.EnableKeyword("_EMISSION");
+            material.SetColor("_EmissionColor", emission);
+        }
+    }
+
+    void ApplySmoke(bool active)
+    {
+        if (smokeParticle == null)
+            return; // TODO: Inspector'dan trafo uzerindeki smoke particle atanabilir.
+
+        if (active && !smokeParticle.isPlaying)
+            smokeParticle.Play();
+        else if (!active && smokeParticle.isPlaying)
+            smokeParticle.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+    }
+
+    void ApplyFailureEffects(bool active)
+    {
+        if (sirenAudioSource != null)
+        {
+            if (active && !sirenAudioSource.isPlaying)
+                sirenAudioSource.Play();
+            else if (!active && sirenAudioSource.isPlaying)
+                sirenAudioSource.Stop();
+        }
+
+        if (alarmLight != null)
+            alarmLight.enabled = active;
+
+        if (explosionEffect != null && explosionEffect.activeSelf != active)
+            explosionEffect.SetActive(active);
+
+        if (active)
+            ApplyCameraShake();
+        else
+            RestoreCameraPosition();
+    }
+
+    void CaptureCameraPosition()
+    {
+        Camera targetCamera = cameraShake != null ? cameraShake : Camera.main;
+        if (targetCamera == null)
+            return; // TODO: Failure camera shake icin Camera referansi atanabilir.
+
+        cameraShake = targetCamera;
+        originalCameraPosition = targetCamera.transform.localPosition;
+        hasCameraOriginalPosition = true;
+    }
+
+    void ApplyCameraShake()
+    {
+        if (cameraShake == null)
+            CaptureCameraPosition();
+        if (cameraShake == null || !hasCameraOriginalPosition)
+            return;
+
+        Vector3 offset = UnityEngine.Random.insideUnitSphere * cameraShakeAmount;
+        offset.z = 0f;
+        cameraShake.transform.localPosition = originalCameraPosition + offset;
+    }
+
+    void RestoreCameraPosition()
+    {
+        if (cameraShake != null && hasCameraOriginalPosition)
+            cameraShake.transform.localPosition = originalCameraPosition;
+    }
+
+    void RaiseAlarmForStatus(string status)
+    {
+        if (status == lastThermalStatus)
+            return;
+
+        if (status == "NORMAL")
+        {
+            if (alarmPanel != null)
+                alarmPanel.SetActive(false);
+            return;
+        }
+
+        if (status == "WARNING")
+        {
+            if (alarmPanelController != null)
+                alarmPanelController.AddAlarm("Transformer temperature warning", AlarmPanelController.AlarmSeverity.Warning);
+            ShowAlarm("UYARI: Trafo sicakligi yukseliyor");
+        }
+        else if (status == "CRITICAL")
+        {
+            if (alarmPanelController != null)
+                alarmPanelController.AddAlarm("Critical transformer temperature", AlarmPanelController.AlarmSeverity.Critical);
+            ShowAlarm("KRITIK: Gercek trafo sicakligi kritik seviyede");
+        }
+        else if (status == "SMOKE")
+        {
+            if (alarmPanelController != null)
+                alarmPanelController.AddAlarm("Transformer overheating smoke detected", AlarmPanelController.AlarmSeverity.Critical);
+            ShowAlarm("DUMAN: Trafo uzerinde asiri isinma");
+        }
+        else if (status == "FAILURE")
+        {
+            if (alarmPanelController != null)
+                alarmPanelController.AddAlarm("Transformer failure", AlarmPanelController.AlarmSeverity.Critical);
+            ShowAlarm("FAILURE: Transformer failure");
         }
     }
     
@@ -461,7 +672,32 @@ void ParseSensorData(string jsonData)
     {
         if (isUnderAttack && attackType == "temperature")
             return attackValue;
-        return lastTemperature;
+        return lastDisplayedTemperature;
+    }
+
+    public float GetLastDisplayedTemperature()
+    {
+        return lastDisplayedTemperature;
+    }
+
+    public float GetLastRealTemperature()
+    {
+        return lastRealTemperature;
+    }
+
+    public bool IsTelemetryAttackActive()
+    {
+        return telemetryAttackActive;
+    }
+
+    public string GetTelemetryAttackType()
+    {
+        return telemetryAttackType;
+    }
+
+    public string GetTelemetryStatus()
+    {
+        return telemetryStatus;
     }
     
     /// <summary>
@@ -559,6 +795,11 @@ public class TrafoData
     public float akim_primer;
     public float akim_sekonder;
     public float yuk_seviyesi;
+    public float realTemperature;
+    public float displayedTemperature;
+    public bool attackActive;
+    public string attackType;
+    public string status;
 }
 
 // Ana thread'de çalıştırmak için yardımcı sınıf

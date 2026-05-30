@@ -91,6 +91,32 @@ public class SCADATerminalController : MonoBehaviour
         outputText.text += line + "\n";
     }
 
+    public void StartCoolingFalseDataAttack()
+    {
+        EnsureReferences();
+        if (hmiController == null)
+        {
+            WriteExternalLine("> Cooling FDI attack could not start: SCADA/HMI controller is missing.");
+            return;
+        }
+
+        hmiController.StartCoolingFalseDataAttack();
+        WriteExternalLine("> False Temperature Injection selected from SCADA UI.");
+    }
+
+    public void StopCoolingFalseDataAttack()
+    {
+        EnsureReferences();
+        if (hmiController == null)
+        {
+            WriteExternalLine("> Cooling FDI restore could not run: SCADA/HMI controller is missing.");
+            return;
+        }
+
+        hmiController.StopCoolingFalseDataAttack();
+        WriteExternalLine("> False Temperature Injection recovery selected from SCADA UI.");
+    }
+
     public void EnsureReferences()
     {
         if (hmiController == null)
@@ -103,7 +129,7 @@ public class SCADATerminalController : MonoBehaviour
     {
         if (parts.Length < 2)
         {
-            writeLine("> Usage: attack goose_data | attack goose_dos");
+            writeLine("> Usage: attack goose_data | attack goose_dos | attack false_temp | attack false_temp_stop");
             return true;
         }
 
@@ -117,6 +143,21 @@ public class SCADATerminalController : MonoBehaviour
             case "goose_dos":
                 hmiController.SimulateGooseDosAttack();
                 writeLine("> GOOSE DoS simulated. IED detected fault, but trip message was blocked.");
+                return true;
+
+            case "false_temp":
+            case "false_temperature":
+            case "cooling_fdi":
+                hmiController.StartCoolingFalseDataAttack();
+                writeLine("> False Temperature Injection command published to veri.py.");
+                writeLine("> SCADA displayedTemperature stays near 55-60 C while realTemperature rises.");
+                return true;
+
+            case "false_temp_stop":
+            case "false_temperature_stop":
+            case "cooling_fdi_stop":
+                hmiController.StopCoolingFalseDataAttack();
+                writeLine("> False Temperature Injection recovery command published to veri.py.");
                 return true;
 
             default:
@@ -135,6 +176,8 @@ public class SCADATerminalController : MonoBehaviour
         writeLine("  reset              Return IED, breaker and alarms to normal");
         writeLine("  attack goose_data  Simulate spoofed GOOSE Trip data");
         writeLine("  attack goose_dos   Simulate GOOSE communication blocking");
+        writeLine("  attack false_temp Start False Temperature Injection");
+        writeLine("  attack false_temp_stop  Restore temperature data");
         writeLine("  clear              Clear this embedded command console");
         writeLine("");
     }

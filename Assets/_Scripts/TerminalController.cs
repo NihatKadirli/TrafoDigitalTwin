@@ -130,7 +130,7 @@ void InitializeTerminal()
         WriteLine("Rol     : Operator konsolu, siber olay simülasyonu ve telemetri izleme");
         WriteLine("----------------------------------------------------------------");
         WriteLine("Komut listesi icin <color=#0FD19E>help</color> yazin.");
-        WriteLine("Onerilen akis: <color=#B9FBCB>status</color> -> <color=#B9FBCB>fault on</color> -> <color=#B9FBCB>reset</color> -> <color=#B9FBCB>attack goose_data</color>");
+        WriteLine("Onerilen akis: <color=#B9FBCB>status</color> -> <color=#B9FBCB>attack false_temp</color> -> <color=#B9FBCB>attack false_temp_stop</color>");
         WriteLine("");
 
         if (WarningPanel != null)
@@ -178,7 +178,9 @@ void OnCommand(string command)
                 WriteLine("  live on            Gelen Python verilerini terminale otomatik yazdirir");
                 WriteLine("  live off           Otomatik telemetri yazimini kapatir");
                 WriteLine("  scan               SCADA ag yuzeyi ve risk ozetini listeler");
-                WriteLine("  attack fdi temp    Sicaklik sensorunde FDI senaryosu baslatir");
+                WriteLine("  attack false_temp  veri.py uzerinden False Temperature Injection baslatir");
+                WriteLine("  attack false_temp_stop  Sicaklik verisini normale dondurur");
+                WriteLine("  attack fdi temp    Eski lokal sicaklik FDI testini baslatir");
                 WriteLine("  attack dos medium  MQTT veri akisinda orta seviye DoS senaryosu baslatir");
                 WriteLine("  stop               Aktif senaryoyu durdurur");
                 WriteLine("  clear              Terminal ciktisini temizler");
@@ -255,7 +257,9 @@ void PrintStatus()
             WriteLine($"MQTT broker      : {(mqttReceiver.IsConnected() ? "<color=#8EF58C>BAGLI</color>" : "<color=#FF6961>BAGLI DEGIL / VERI BEKLENIYOR</color>")}");
             WriteLine($"Topic            : TM1/Trafo/sensor");
             WriteLine($"Paket sayisi     : {mqttReceiver.GetMessageCounter()}");
-            WriteLine($"Trafo sicakligi  : {mqttReceiver.GetLastTemperature():F1} C");
+            WriteLine($"SCADA sicakligi  : {mqttReceiver.GetLastDisplayedTemperature():F1} C");
+            WriteLine($"Gercek sicaklik  : {mqttReceiver.GetLastRealTemperature():F1} C");
+            WriteLine($"Termal durum     : {mqttReceiver.GetTelemetryStatus()}");
             WriteLine($"Yag sicakligi    : {mqttReceiver.GetLastOilTemperature():F1} C");
             WriteLine($"Primer gerilim   : {mqttReceiver.GetLastVoltage():F1} kV");
             WriteLine($"Sekonder gerilim : {mqttReceiver.GetLastSecondaryVoltage():F1} kV");
@@ -294,7 +298,8 @@ void PrintTelemetrySnapshot()
             return;
         }
 
-        WriteLine($"Paket #{mqttReceiver.GetMessageCounter()} | sicaklik={mqttReceiver.GetLastTemperature():F1} C | yag={mqttReceiver.GetLastOilTemperature():F1} C | gerilim={mqttReceiver.GetLastVoltage():F1} kV | yuk=%{mqttReceiver.GetLastLoad():F1}");
+        WriteLine($"Paket #{mqttReceiver.GetMessageCounter()} | displayed={mqttReceiver.GetLastDisplayedTemperature():F1} C | real={mqttReceiver.GetLastRealTemperature():F1} C | durum={mqttReceiver.GetTelemetryStatus()}");
+        WriteLine($"Yag={mqttReceiver.GetLastOilTemperature():F1} C | gerilim={mqttReceiver.GetLastVoltage():F1} kV | yuk=%{mqttReceiver.GetLastLoad():F1}");
         WriteLine($"Akim primer={mqttReceiver.GetLastPrimaryCurrent():F1} A | akim sekonder={mqttReceiver.GetLastSecondaryCurrent():F1} A | sekonder gerilim={mqttReceiver.GetLastSecondaryVoltage():F1} kV");
         string raw = mqttReceiver.GetLastRawJson();
         if (!string.IsNullOrEmpty(raw))
@@ -310,7 +315,7 @@ void PrintLiveTelemetryIfNew()
         if (counter <= 0 || counter == lastDisplayedTelemetryCounter) return;
 
         lastDisplayedTelemetryCounter = counter;
-        WriteLine($"<color=#728087>[veri.py #{counter}]</color> sicaklik={mqttReceiver.GetLastTemperature():F1} C | yag={mqttReceiver.GetLastOilTemperature():F1} C | gerilim={mqttReceiver.GetLastVoltage():F1} kV | yuk=%{mqttReceiver.GetLastLoad():F1}", true);
+        WriteLine($"<color=#728087>[veri.py #{counter}]</color> displayed={mqttReceiver.GetLastDisplayedTemperature():F1} C | real={mqttReceiver.GetLastRealTemperature():F1} C | durum={mqttReceiver.GetTelemetryStatus()} | gerilim={mqttReceiver.GetLastVoltage():F1} kV", true);
     }
 
 
@@ -452,7 +457,8 @@ void UpdateStatusBar()
         float volt = mqttReceiver.GetLastVoltage();
         float load = mqttReceiver.GetLastLoad();
 
-        string text = $"PY #{mqttReceiver.GetMessageCounter()} | TEMP {temp:F1} C | VOLT {volt:F1} kV | LOAD %{load:F1}";
+        string text = $"PY #{mqttReceiver.GetMessageCounter()} | SCADA {temp:F1} C | REAL {mqttReceiver.GetLastRealTemperature():F1} C | VOLT {volt:F1} kV | LOAD %{load:F1}";
+        if (mqttReceiver.IsTelemetryAttackActive()) text = "FALSE TEMP FDI | " + text;
         if (isAttackRunning) text = "SENARYO AKTIF | " + text;
         if (!mqttReceiver.IsConnected()) text += " | MQTT VERI BEKLENIYOR";
 

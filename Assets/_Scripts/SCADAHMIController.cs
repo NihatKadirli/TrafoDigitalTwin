@@ -26,6 +26,7 @@ public class SCADAHMIController : MonoBehaviour
     public SCADATerminalController terminalController;
     public SimpleMQTTReceiver mqttReceiver;
     public BreakerController breakerControlScenario;
+    public CoolingFalseDataReceiver coolingFalseDataReceiver;
 
     [Header("Mimic Component Status")]
     public List<ComponentStatusBinding> componentBindings = new List<ComponentStatusBinding>();
@@ -45,6 +46,9 @@ public class SCADAHMIController : MonoBehaviour
     public Image breakerStateIndicator;
     public TMP_Text breakerCommandSourceText;
     public TMP_Text breakerLastCommandTimeText;
+    public TMP_Text transformerTemperatureText;
+    public TMP_Text coolingAttackLogText;
+    public TMP_Text securityLogText;
 
     [Header("Header")]
     public TMP_Text systemModeText;
@@ -103,6 +107,8 @@ public class SCADAHMIController : MonoBehaviour
             mqttReceiver = FindFirstObjectByType<SimpleMQTTReceiver>();
         if (breakerControlScenario == null)
             breakerControlScenario = GetComponent<BreakerController>() ?? FindFirstObjectByType<BreakerController>();
+        if (coolingFalseDataReceiver == null)
+            coolingFalseDataReceiver = GetComponent<CoolingFalseDataReceiver>() ?? FindFirstObjectByType<CoolingFalseDataReceiver>();
     }
 
     public void SetFault(bool active)
@@ -168,6 +174,36 @@ public class SCADAHMIController : MonoBehaviour
         RefreshAll();
     }
 
+    public void StartCoolingFalseDataAttack()
+    {
+        EnsureReferences();
+
+        if (coolingFalseDataReceiver == null)
+        {
+            Debug.LogWarning("[SCADAHMIController] CoolingFalseDataReceiver is not assigned; cooling FDI attack cannot publish MQTT messages.");
+            return;
+        }
+
+        coolingFalseDataReceiver.PublishStartAttack();
+        if (securityLogText != null)
+            securityLogText.text = "Data Integrity Attack Detected";
+        RefreshAll();
+    }
+
+    public void StopCoolingFalseDataAttack()
+    {
+        EnsureReferences();
+
+        if (coolingFalseDataReceiver == null)
+        {
+            Debug.LogWarning("[SCADAHMIController] CoolingFalseDataReceiver is not assigned; cooling FDI restore cannot publish MQTT messages.");
+            return;
+        }
+
+        coolingFalseDataReceiver.PublishStopAttack();
+        RefreshAll();
+    }
+
     public IEnumerable<string> GetStatusLines()
     {
         EnsureReferences();
@@ -187,6 +223,16 @@ public class SCADAHMIController : MonoBehaviour
         yield return $"Network Switch     : {GetComponentStatus("Network Switch")}";
         yield return $"SCADA Server       : {GetComponentStatus("SCADA Server")}";
         yield return $"Current            : {iedController.currentAmpere:F0} A";
+        if (mqttReceiver != null)
+        {
+            yield return $"SCADA Temperature  : {mqttReceiver.GetLastDisplayedTemperature():F1} C";
+            yield return $"Real Temperature   : {mqttReceiver.GetLastRealTemperature():F1} C";
+            yield return $"Thermal Status     : {mqttReceiver.GetTelemetryStatus()}";
+        }
+        if (coolingFalseDataReceiver != null)
+        {
+            yield return $"Alarm Suppression  : {(coolingFalseDataReceiver.IsAlarmSuppressionActive ? "ON" : "OFF")}";
+        }
         yield return $"Trip Threshold     : {iedController.tripThreshold:F0} A";
         yield return $"GOOSE stNum/sqNum  : {iedController.gooseStNum}/{iedController.gooseSqNum}";
         yield return $"Last GOOSE         : {iedController.lastGooseMessage}";
@@ -263,6 +309,25 @@ public class SCADAHMIController : MonoBehaviour
             if (breakerLastCommandTimeText != null && breakerControlScenario != null)
                 breakerLastCommandTimeText.text = breakerControlScenario.LastCommandTime;
         }
+
+        if (mqttReceiver != null)
+        {
+            if (transformerTemperatureText != null)
+                transformerTemperatureText.text = $"{mqttReceiver.GetLastDisplayedTemperature():F1} C";
+            if (coolingAttackLogText != null)
+                coolingAttackLogText.text = $"Real transformer temperature: {mqttReceiver.GetLastRealTemperature():F1} C";
+            if (securityLogText != null && mqttReceiver.IsTelemetryAttackActive())
+                securityLogText.text = "Data Integrity Attack Detected";
+        }
+        else if (coolingFalseDataReceiver != null)
+        {
+            if (transformerTemperatureText != null)
+                transformerTemperatureText.text = $"{coolingFalseDataReceiver.FakeTemperature:F0} C";
+            if (coolingAttackLogText != null)
+                coolingAttackLogText.text = $"Real transformer temperature: {coolingFalseDataReceiver.RealTemperature:F0} C";
+            if (securityLogText != null && coolingFalseDataReceiver.IsFalseDataInjectionActive)
+                securityLogText.text = "Data Integrity Attack Detected";
+        }
     }
 
     void RefreshComponentBindings()
@@ -288,6 +353,10 @@ public class SCADAHMIController : MonoBehaviour
         {
             if (breakerControlScenario != null && breakerControlScenario.HasActiveSecurityAlarm)
                 systemModeText.text = "CYBER SECURITY EVENT";
+            else if (mqttReceiver != null && mqttReceiver.IsTelemetryAttackActive())
+                systemModeText.text = "CYBER SECURITY EVENT";
+            else if (coolingFalseDataReceiver != null && coolingFalseDataReceiver.IsFalseDataInjectionActive)
+                systemModeText.text = "CYBER SECURITY EVENT";
             else if (iedController != null && iedController.attackDetected)
                 systemModeText.text = "CYBER SECURITY EVENT";
             else if (iedController != null && (iedController.faultDetected || iedController.tripStatus))
@@ -308,6 +377,12 @@ public class SCADAHMIController : MonoBehaviour
         switch (componentName)
         {
             case "Transformer":
+                if (mqttReceiver != null && mqttReceiver.GetLastRealTemperature() > 85f)
+                    return "FAULT";
+                if (mqttReceiver != null && mqttReceiver.GetLastRealTemperature() > 70f)
+                    return "SUSPECT";
+                if (coolingFalseDataReceiver != null && coolingFalseDataReceiver.RealTemperature > 80f)
+                    return coolingFalseDataReceiver.IsAlarmSuppressionActive ? "NORMAL" : "FAULT";
                 return iedController.faultDetected ? "FAULT" : "NORMAL";
             case "Busbar":
                 return iedController.faultDetected ? "FAULT" : "NORMAL";

@@ -51,6 +51,11 @@ public class TerminalUIBuilder : MonoBehaviour
     TMP_Text breakerLastCommandTimeText;
     Image breakerStateIndicator;
     Image breakerMimicIndicator;
+    TMP_Text transformerTemperatureText;
+    TMP_Text coolingAttackLogText;
+    TMP_Text securityLogText;
+    Button coolingAttackButton;
+    Button coolingStopButton;
 
     TMP_Text alarmListText;
     TMP_Text alarmCountText;
@@ -303,11 +308,14 @@ public class TerminalUIBuilder : MonoBehaviour
     {
         GameObject panel = CreateTitledLayoutPanel(parent, "IEDPanel", "IED PROTECTION RELAY / GOOSE", new Vector2(0f, 0.585f), Vector2.one);
         iedCurrentText = AddDataRow(panel.transform, "Current Ampere", "420 A");
+        transformerTemperatureText = AddDataRow(panel.transform, "SCADA Temp", "42 C");
         iedThresholdText = AddDataRow(panel.transform, "Trip Threshold", "900 A");
         iedTripStatusText = AddDataRow(panel.transform, "Trip Status", "NO TRIP");
         iedStNumText = AddDataRow(panel.transform, "GOOSE stNum", "1");
         iedSqNumText = AddDataRow(panel.transform, "GOOSE sqNum", "0");
         iedAttackText = AddDataRow(panel.transform, "Security", "No attack");
+        coolingAttackLogText = AddBlockRow(panel.transform, "Cooling Attack Log", "Real transformer temperature: 45 C", 30f);
+        securityLogText = AddBlockRow(panel.transform, "Security Log", "No data integrity event", 30f);
     }
 
     void BuildBreakerPanel(RectTransform parent)
@@ -452,11 +460,14 @@ public class TerminalUIBuilder : MonoBehaviour
 
         TMP_Text title = CreateTMP("ConsoleTitle", titleRow.transform, "SCADA Terminal / Command Console", 14, ColAccent, FontStyles.Bold);
         title.alignment = TextAlignmentOptions.MidlineLeft;
-        SetAnchors(title.rectTransform, Vector2.zero, new Vector2(0.42f, 1f), Vector2.zero, Vector2.zero);
+        SetAnchors(title.rectTransform, Vector2.zero, new Vector2(0.30f, 1f), Vector2.zero, Vector2.zero);
+
+        coolingAttackButton = CreateConsoleButton(titleRow.transform, "CoolingAttackButton", "False Temp Injection", new Vector2(0.32f, 0.08f), new Vector2(0.58f, 0.92f), new Color(0.72f, 0.16f, 0.08f, 1f));
+        coolingStopButton = CreateConsoleButton(titleRow.transform, "CoolingStopButton", "Stop", new Vector2(0.59f, 0.08f), new Vector2(0.66f, 0.92f), new Color(0.18f, 0.24f, 0.28f, 1f));
 
         statusBarText = CreateTMP("StatusBar", titleRow.transform, "IEC 61850 station bus ready", 12, ColDim);
         statusBarText.alignment = TextAlignmentOptions.MidlineRight;
-        SetAnchors(statusBarText.rectTransform, new Vector2(0.42f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        SetAnchors(statusBarText.rectTransform, new Vector2(0.67f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
 
         BuildOutputScroll(console.transform);
         BuildInputRow(console.transform);
@@ -589,6 +600,7 @@ public class TerminalUIBuilder : MonoBehaviour
         CircuitBreakerController breaker = gameObject.GetComponent<CircuitBreakerController>() ?? gameObject.AddComponent<CircuitBreakerController>();
         BreakerController breakerScenario = gameObject.GetComponent<BreakerController>() ?? gameObject.AddComponent<BreakerController>();
         BreakerMQTTReceiver breakerMqtt = gameObject.GetComponent<BreakerMQTTReceiver>() ?? gameObject.AddComponent<BreakerMQTTReceiver>();
+        CoolingFalseDataReceiver coolingReceiver = gameObject.GetComponent<CoolingFalseDataReceiver>() ?? gameObject.AddComponent<CoolingFalseDataReceiver>();
         AlarmPanelController alarms = gameObject.GetComponent<AlarmPanelController>() ?? gameObject.AddComponent<AlarmPanelController>();
         SCADAHMIController hmi = gameObject.GetComponent<SCADAHMIController>() ?? gameObject.AddComponent<SCADAHMIController>();
         SCADATerminalController scadaTerminal = gameObject.GetComponent<SCADATerminalController>() ?? gameObject.AddComponent<SCADATerminalController>();
@@ -599,6 +611,7 @@ public class TerminalUIBuilder : MonoBehaviour
         hmi.alarmPanel = alarms;
         hmi.terminalController = scadaTerminal;
         hmi.breakerControlScenario = breakerScenario;
+        hmi.coolingFalseDataReceiver = coolingReceiver;
         hmi.componentBindings = componentBindings;
         hmi.systemModeText = systemModeText;
         hmi.protocolText = protocolText;
@@ -615,6 +628,9 @@ public class TerminalUIBuilder : MonoBehaviour
         hmi.breakerStateIndicator = breakerStateIndicator;
         hmi.breakerCommandSourceText = breakerCommandSourceText;
         hmi.breakerLastCommandTimeText = breakerLastCommandTimeText;
+        hmi.transformerTemperatureText = transformerTemperatureText;
+        hmi.coolingAttackLogText = coolingAttackLogText;
+        hmi.securityLogText = securityLogText;
 
         ied.currentText = iedCurrentText;
         ied.thresholdText = iedThresholdText;
@@ -642,6 +658,14 @@ public class TerminalUIBuilder : MonoBehaviour
         breakerScenario.energyLineImages = new[] { breakerMimicIndicator };
 
         breakerMqtt.breakerController = breakerScenario;
+
+        coolingReceiver.scadaTemperatureText = transformerTemperatureText;
+        coolingReceiver.realTemperatureLogText = coolingAttackLogText;
+        coolingReceiver.attackLogText = coolingAttackLogText;
+        coolingReceiver.securityLogText = securityLogText;
+        coolingReceiver.alarmPanelImage = alarmPanelImage;
+        coolingReceiver.alarmPanelController = alarms;
+        coolingReceiver.terminalController = scadaTerminal;
 
         alarms.alarmListText = alarmListText;
         alarms.alarmCountText = alarmCountText;
@@ -671,8 +695,35 @@ public class TerminalUIBuilder : MonoBehaviour
             minButton.onClick.AddListener(windowManager.KucultButonTiklandi);
         if (toggleButton != null)
             toggleButton.onClick.AddListener(windowManager.ToggleButonTiklandi);
+        if (coolingAttackButton != null)
+            coolingAttackButton.onClick.AddListener(scadaTerminal.StartCoolingFalseDataAttack);
+        if (coolingStopButton != null)
+            coolingStopButton.onClick.AddListener(scadaTerminal.StopCoolingFalseDataAttack);
 
         hmi.RefreshAll();
+    }
+
+    Button CreateConsoleButton(Transform parent, string name, string label, Vector2 anchorMin, Vector2 anchorMax, Color color)
+    {
+        GameObject go = CreateUI(name, parent);
+        RectTransform rt = go.GetComponent<RectTransform>();
+        SetAnchors(rt, anchorMin, anchorMax, Vector2.zero, Vector2.zero);
+        Image image = AddImage(go, color);
+        Button button = go.AddComponent<Button>();
+        button.targetGraphic = image;
+
+        ColorBlock colors = button.colors;
+        colors.highlightedColor = new Color(Mathf.Min(color.r + 0.10f, 1f), Mathf.Min(color.g + 0.10f, 1f), Mathf.Min(color.b + 0.10f, 1f), 1f);
+        colors.pressedColor = new Color(color.r * 0.75f, color.g * 0.75f, color.b * 0.75f, 1f);
+        button.colors = colors;
+
+        TMP_Text text = CreateTMP("Label", go.transform, label, 10, Color.white, FontStyles.Bold, TextAlignmentOptions.Center);
+        text.enableAutoSizing = true;
+        text.fontSizeMin = 8f;
+        text.fontSizeMax = 10f;
+        text.overflowMode = TextOverflowModes.Ellipsis;
+        SetAnchors(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(6f, 0f), new Vector2(-6f, 0f));
+        return button;
     }
 
     Button CreateTitleButton(Transform parent, string name, string label)
