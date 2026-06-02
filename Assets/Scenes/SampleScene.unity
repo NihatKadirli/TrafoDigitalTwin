@@ -536,7 +536,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &123262370
@@ -611,7 +611,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &170968956
@@ -765,7 +765,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &214769565
@@ -971,6 +971,8 @@ MonoBehaviour:
   subscriptionTopic: substation/#
   clientId: UnityCoolingFalseData
   logReceivedPayloads: 1
+  autoReconnect: 1
+  reconnectIntervalSeconds: 2
   fanObjects: []
   fanRotationScripts: []
   rotateFansWhenCoolingOn: 1
@@ -984,8 +986,36 @@ MonoBehaviour:
   normalEmissionColor: {r: 0, g: 0, b: 0, a: 1}
   overheatedEmissionColor: {r: 1, g: 0.22, b: 0.02, a: 1}
   criticalTemperature: 80
+  normalOilTemperature: 55
+  criticalOilTemperature: 90
+  normalOilLevel: 78
+  criticalOilLevel: 30
+  oilAlarmColor: {r: 1, g: 0.05, b: 0.02, a: 1}
+  oilAlarmEmissionColor: {r: 1, g: 0.1, b: 0.02, a: 1}
   smokeParticle: {fileID: 0}
+  smokeParticles: []
   smokeObject: {fileID: 0}
+  configureSmokeForDemo: 1
+  createVisibleSmokeEmitterForDemo: 1
+  createVisibleSmokeCloudForDemo: 1
+  demoSmokeColor: {r: 0.42, g: 0.42, b: 0.42, a: 0.82}
+  demoSmokeCloudColor: {r: 0.22, g: 0.22, b: 0.22, a: 0.72}
+  demoSmokeStartSize: 1.35
+  demoSmokeStartSpeed: 0.85
+  demoSmokeLifetime: 4
+  demoSmokeEmissionRate: 45
+  visibleSmokeWorldOffset: {x: 0, y: 1.2, z: 0}
+  visibleSmokeCloudScale: {x: 1, y: 0.7, z: 1}
+  focusCameraOnSmokeAttack: 1
+  smokeFocusCamera: {fileID: 0}
+  smokeFocusTarget: {fileID: 0}
+  smokeFocusTargetName: TransformerSmoke
+  safeFocusReferenceObjectName: FPS_Player
+  smokeFocusOffset: {x: 0, y: 1.8, z: -5}
+  smokeLookOffset: {x: 0, y: 0.8, z: 0}
+  smokeFocusFieldOfView: 42
+  smokeFocusHoldSeconds: 5
+  disableCinemachineBrainDuringSmokeFocus: 1
   scadaTemperatureText: {fileID: 0}
   realTemperatureLogText: {fileID: 0}
   attackLogText: {fileID: 0}
@@ -994,6 +1024,7 @@ MonoBehaviour:
   alarmSuppressedColor: {r: 0.31, g: 0.95, b: 0.48, a: 1}
   alarmPanelController: {fileID: 0}
   terminalController: {fileID: 0}
+  fdiSmokeEffectController: {fileID: 0}
 --- !u!1 &239156054
 GameObject:
   m_ObjectHideFlags: 0
@@ -1395,8 +1426,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 330585543}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.06821918, y: -0.6991914, z: 0.067333795, w: 0.7084799}
-  m_LocalPosition: {x: -20.289152, y: 5.5848846, z: 13.96705}
+  m_LocalRotation: {x: 0.013739613, y: -0.95702624, z: 0.2860054, w: 0.04596648}
+  m_LocalPosition: {x: -22.778828, y: 3.8015437, z: 6.3050733}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -3272,7 +3303,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &741407374
@@ -4793,6 +4824,7 @@ MonoBehaviour:
   alarmLight: {fileID: 0}
   explosionEffect: {fileID: 0}
   cameraShake: {fileID: 0}
+  enableFailureCameraShake: 0
   cameraShakeAmount: 0.08
   brokerAddress: localhost
   brokerPort: 1883
@@ -4846,7 +4878,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1102455672
@@ -5000,7 +5032,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1181063388
@@ -5075,7 +5107,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1193316322
@@ -5287,7 +5319,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1239335342
@@ -5594,7 +5626,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1290946392
@@ -6414,7 +6446,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1552465965
@@ -6489,7 +6521,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1569240261
@@ -6530,6 +6562,133 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1569240259}
   m_CullTransparentMesh: 1
+--- !u!1 &1618931780
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1618931783}
+  - component: {fileID: 1618931782}
+  - component: {fileID: 1618931781}
+  m_Layer: 0
+  m_Name: Alarm-Light
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 0
+--- !u!114 &1618931781
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1618931780}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 474bcb49853aa07438625e644c072ee6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.UniversalAdditionalLightData
+  m_UsePipelineSettings: 1
+  m_AdditionalLightsShadowResolutionTier: 2
+  m_CustomShadowLayers: 0
+  m_LightCookieSize: {x: 1, y: 1}
+  m_LightCookieOffset: {x: 0, y: 0}
+  m_SoftShadowQuality: 0
+  m_RenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 1
+  m_ShadowRenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 1
+  m_Version: 4
+  m_LightLayerMask: 1
+  m_ShadowLayerMask: 1
+  m_RenderingLayers: 1
+  m_ShadowRenderingLayers: 1
+--- !u!108 &1618931782
+Light:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1618931780}
+  m_Enabled: 1
+  serializedVersion: 12
+  m_Type: 1
+  m_Color: {r: 0.5450981, g: 0, b: 0, a: 1}
+  m_Intensity: 5
+  m_Range: 258.53
+  m_SpotAngle: 30
+  m_InnerSpotAngle: 21.80208
+  m_CookieSize2D: {x: 0.5, y: 0.5}
+  m_Shadows:
+    m_Type: 0
+    m_Resolution: -1
+    m_CustomResolution: -1
+    m_Strength: 1
+    m_Bias: 0.05
+    m_NormalBias: 0.4
+    m_NearPlane: 0.2
+    m_CullingMatrixOverride:
+      e00: 1
+      e01: 0
+      e02: 0
+      e03: 0
+      e10: 0
+      e11: 1
+      e12: 0
+      e13: 0
+      e20: 0
+      e21: 0
+      e22: 1
+      e23: 0
+      e30: 0
+      e31: 0
+      e32: 0
+      e33: 1
+    m_UseCullingMatrixOverride: 0
+  m_Cookie: {fileID: 0}
+  m_DrawHalo: 0
+  m_Flare: {fileID: 0}
+  m_RenderMode: 0
+  m_CullingMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_RenderingLayerMask: 1
+  m_Lightmapping: 2
+  m_LightShadowCasterMode: 0
+  m_AreaSize: {x: 1, y: 1}
+  m_BounceIntensity: 0
+  m_ColorTemperature: 6570
+  m_UseColorTemperature: 0
+  m_BoundingSphereOverride: {x: 0, y: 0, z: 0, w: 0}
+  m_UseBoundingSphereOverride: 0
+  m_UseViewFrustumForShadowCasterCull: 1
+  m_ForceVisible: 0
+  m_ShadowRadius: 0
+  m_ShadowAngle: 0
+  m_LightUnit: 1
+  m_LuxAtDistance: 1
+  m_EnableSpotReflector: 1
+--- !u!4 &1618931783
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1618931780}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0.87787074, y: -0, z: -0, w: 0.47889772}
+  m_LocalPosition: {x: 10.19, y: 4.11, z: 1.67}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 122.772995, y: 0, z: 0}
 --- !u!1 &1636353196
 GameObject:
   m_ObjectHideFlags: 0
@@ -17357,7 +17516,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &1831921320
@@ -17939,7 +18098,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 3, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 6, y: 0}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &2098145379
@@ -18089,3 +18248,4 @@ SceneRoots:
   - {fileID: 233590508}
   - {fileID: 1927439093}
   - {fileID: 841203876}
+  - {fileID: 1618931783}
