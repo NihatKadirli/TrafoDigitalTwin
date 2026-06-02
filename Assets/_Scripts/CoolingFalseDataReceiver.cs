@@ -16,6 +16,8 @@ public class CoolingFalseDataReceiver : MonoBehaviour
     public string subscriptionTopic = "substation/#";
     public string clientId = "UnityCoolingFalseData";
     public bool logReceivedPayloads = true;
+    public bool autoReconnect = true;
+    public float reconnectIntervalSeconds = 2f;
 
     [Header("Fan Visuals")]
     public Transform[] fanObjects;
@@ -33,9 +35,41 @@ public class CoolingFalseDataReceiver : MonoBehaviour
     public Color overheatedEmissionColor = new Color(1f, 0.22f, 0.02f, 1f);
     public float criticalTemperature = 80f;
 
+    [Header("Transformer Oil Alarm")]
+    public float normalOilTemperature = 55f;
+    public float criticalOilTemperature = 90f;
+    public float normalOilLevel = 78f;
+    public float criticalOilLevel = 30f;
+    public Color oilAlarmColor = new Color(1f, 0.05f, 0.02f, 1f);
+    public Color oilAlarmEmissionColor = new Color(1f, 0.1f, 0.02f, 1f);
+
     [Header("Smoke Effect")]
     public ParticleSystem smokeParticle;
+    public ParticleSystem[] smokeParticles;
     public GameObject smokeObject;
+    public bool configureSmokeForDemo = true;
+    public bool createVisibleSmokeEmitterForDemo = true;
+    public bool createVisibleSmokeCloudForDemo = true;
+    public Color demoSmokeColor = new Color(0.42f, 0.42f, 0.42f, 0.82f);
+    public Color demoSmokeCloudColor = new Color(0.22f, 0.22f, 0.22f, 0.72f);
+    public float demoSmokeStartSize = 1.35f;
+    public float demoSmokeStartSpeed = 0.85f;
+    public float demoSmokeLifetime = 4f;
+    public float demoSmokeEmissionRate = 45f;
+    public Vector3 visibleSmokeWorldOffset = new Vector3(0f, 4.0f, 0f);
+    public Vector3 visibleSmokeCloudScale = new Vector3(1.7f, 1.15f, 1.7f);
+
+    [Header("FDI Camera Focus")]
+    public bool focusCameraOnSmokeAttack = true;
+    public Camera smokeFocusCamera;
+    public Transform smokeFocusTarget;
+    public string smokeFocusTargetName = "TransformerSmoke";
+    public string safeFocusReferenceObjectName = "FPS_Player";
+    public Vector3 smokeFocusOffset = new Vector3(0f, 1.3f, -7.0f);
+    public Vector3 smokeLookOffset = new Vector3(0f, 0.5f, 0f);
+    public float smokeFocusFieldOfView = 42f;
+    public float smokeFocusHoldSeconds = 5f;
+    public bool disableCinemachineBrainDuringSmokeFocus = true;
 
     [Header("SCADA UI")]
     public TMP_Text scadaTemperatureText;
@@ -48,6 +82,7 @@ public class CoolingFalseDataReceiver : MonoBehaviour
     [Header("Controllers")]
     public AlarmPanelController alarmPanelController;
     public SCADATerminalController terminalController;
+    public FDISmokeEffectController fdiSmokeEffectController;
 
     TcpClient tcpClient;
     NetworkStream stream;
@@ -55,25 +90,39 @@ public class CoolingFalseDataReceiver : MonoBehaviour
     volatile bool isRunning;
     volatile bool isConnected;
     SynchronizationContext unityContext;
+    float nextReconnectTime;
 
     readonly Queue<MqttMessage> pendingMessages = new Queue<MqttMessage>();
     readonly object pendingMessageLock = new object();
     readonly object streamLock = new object();
     readonly Dictionary<Renderer, Color> originalRendererColors = new Dictionary<Renderer, Color>();
     readonly Dictionary<Renderer, Color> originalRendererEmissionColors = new Dictionary<Renderer, Color>();
+    const int MqttHandshakeTimeoutMs = 2000;
 
     bool coolingOn = true;
     bool smokeOn;
     bool alarmSuppressionOn;
     bool falseDataInjectionActive;
+    bool oilCriticalAlarmActive;
+    bool buchholzRelayWarning;
     float fakeTemperature = 42f;
     float realTemperature = 45f;
+    float oilTemperature;
+    float oilLevel;
+    Timer smokeFocusRestoreTimer;
+    bool smokeFocusActive;
+    ParticleSystem visibleDemoSmokeParticle;
+    GameObject visibleSmokeCloudObject;
+    Material visibleSmokeCloudMaterial;
 
     public bool IsCoolingOn => coolingOn;
     public bool IsAlarmSuppressionActive => alarmSuppressionOn;
     public bool IsFalseDataInjectionActive => falseDataInjectionActive;
     public float FakeTemperature => fakeTemperature;
     public float RealTemperature => realTemperature;
+    public bool IsOilCriticalAlarmActive => oilCriticalAlarmActive;
+    public float OilTemperature => oilTemperature;
+    public float OilLevel => oilLevel;
 
     void Start()
     {
@@ -86,6 +135,12 @@ public class CoolingFalseDataReceiver : MonoBehaviour
 
     void Update()
     {
+        if (autoReconnect && !IsConnected() && Time.unscaledTime >= nextReconnectTime)
+        {
+            nextReconnectTime = Time.unscaledTime + Mathf.Max(0.5f, reconnectIntervalSeconds);
+            Connect();
+        }
+
         DrainPendingMessages();
 
         if (coolingOn && rotateFansWhenCoolingOn && fanObjects != null)
@@ -122,10 +177,18 @@ public class CoolingFalseDataReceiver : MonoBehaviour
         switch (topic)
         {
             case "substation/attack/type":
-                falseDataInjectionActive =
-                    string.Equals(value, "cooling_false_data", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(value, "false_temperature_injection", StringComparison.OrdinalIgnoreCase);
-                AppendLog(falseDataInjectionActive ? "False Data Injection Active" : "Cooling false data attack cleared");
+                if (string.Equals(value, "oil_critical_alarm", StringComparison.OrdinalIgnoreCase))
+                {
+                    falseDataInjectionActive = true;
+                    AppendLog("Transformer oil critical alarm scenario armed");
+                }
+                else
+                {
+                    falseDataInjectionActive =
+                        string.Equals(value, "cooling_false_data", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(value, "false_temperature_injection", StringComparison.OrdinalIgnoreCase);
+                    AppendLog(falseDataInjectionActive ? "False Data Injection Active" : "Cooling false data attack cleared");
+                }
                 break;
 
             case "substation/attack/temperature/set":
@@ -165,6 +228,37 @@ public class CoolingFalseDataReceiver : MonoBehaviour
                 alarmSuppressionOn = string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase);
                 ApplyAlarmSuppressionState();
                 break;
+
+            case "substation/transformer/oil_temperature":
+                if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float oilTemp))
+                    oilTemperature = oilTemp;
+                if (!buchholzRelayWarning && oilTemperature < criticalOilTemperature && oilLevel > criticalOilLevel)
+                    SetOilCriticalAlarm(false, "Oil temperature returned to normal");
+                break;
+
+            case "substation/transformer/oil_level":
+                if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out float oilLvl))
+                    oilLevel = oilLvl;
+                if (!buchholzRelayWarning && oilTemperature < criticalOilTemperature && oilLevel > criticalOilLevel)
+                    SetOilCriticalAlarm(false, "Oil level returned to normal");
+                break;
+
+            case "substation/protection/buchholz":
+                buchholzRelayWarning =
+                    string.Equals(value, "WARNING", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(value, "TRIP", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(value, "ACTIVE", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase);
+                SetOilCriticalAlarm(buchholzRelayWarning, buchholzRelayWarning ? "Buchholz relay warning received" : "Buchholz relay warning cleared");
+                break;
+
+            case "substation/transformer/oil_alarm":
+                bool oilAlarmOn =
+                    string.Equals(value, "ON", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(value, "START", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(value, "CRITICAL", StringComparison.OrdinalIgnoreCase);
+                SetOilCriticalAlarm(oilAlarmOn, oilAlarmOn ? "Oil critical alarm command received" : "Oil critical alarm cleared");
+                break;
         }
     }
 
@@ -174,14 +268,196 @@ public class CoolingFalseDataReceiver : MonoBehaviour
             alarmPanelController = GetComponent<AlarmPanelController>() ?? FindFirstObjectByType<AlarmPanelController>();
         if (terminalController == null)
             terminalController = GetComponent<SCADATerminalController>() ?? FindFirstObjectByType<SCADATerminalController>();
+        if (fdiSmokeEffectController == null)
+            fdiSmokeEffectController = FDISmokeEffectController.GetOrCreate();
+        if (smokeFocusCamera == null)
+            smokeFocusCamera = Camera.main;
+        AutoAssignTransformerRenderers();
+    }
+
+    void AutoAssignSmokeReferences()
+    {
+        if (smokeParticle != null && smokeParticles != null && smokeParticles.Length > 0)
+            return;
+
+        List<ParticleSystem> foundSmokeParticles = new List<ParticleSystem>();
+        ParticleSystem[] sceneParticles = FindObjectsByType<ParticleSystem>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+
+        foreach (ParticleSystem particle in sceneParticles)
+        {
+            if (particle == null)
+                continue;
+
+            string objectName = particle.gameObject.name;
+            if (objectName.IndexOf("smoke", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                objectName.IndexOf("duman", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                foundSmokeParticles.Add(particle);
+            }
+        }
+
+        if (foundSmokeParticles.Count == 0)
+        {
+            SimpleMQTTReceiver legacyReceiver = FindFirstObjectByType<SimpleMQTTReceiver>(FindObjectsInactive.Include);
+            if (legacyReceiver != null && legacyReceiver.smokeParticle != null)
+                foundSmokeParticles.Add(legacyReceiver.smokeParticle);
+        }
+
+        if (foundSmokeParticles.Count == 0)
+        {
+            Debug.LogWarning("[CoolingFalseDataReceiver] Smoke ParticleSystem could not be found. Add a ParticleSystem named TransformerSmoke or assign smokeParticle in Inspector.");
+            return;
+        }
+
+        smokeParticles = foundSmokeParticles.ToArray();
+        smokeParticle = smokeParticles[0];
+
+        if (createVisibleSmokeEmitterForDemo)
+            EnsureVisibleDemoSmokeEmitter(foundSmokeParticles);
+
+        if (smokeFocusTarget == null)
+            smokeFocusTarget = smokeParticle.transform;
+
+        if (smokeObject == null && smokeParticle != null)
+            smokeObject = smokeParticle.gameObject;
+
+        Debug.Log($"[CoolingFalseDataReceiver] Auto-assigned {smokeParticles.Length} smoke ParticleSystem reference(s).");
+    }
+
+    void EnsureVisibleDemoSmokeEmitter(List<ParticleSystem> baseSmokeParticles)
+    {
+        if (visibleDemoSmokeParticle != null)
+            return;
+
+        Vector3 averagePosition = Vector3.zero;
+        int count = 0;
+        foreach (ParticleSystem particle in baseSmokeParticles)
+        {
+            if (particle == null)
+                continue;
+
+            averagePosition += particle.transform.position;
+            count++;
+        }
+
+        if (count == 0)
+            return;
+
+        GameObject smokeEmitter = new GameObject("FDI_VisibleSmokeEmitter");
+        smokeEmitter.transform.position = (averagePosition / count) + visibleSmokeWorldOffset;
+        smokeEmitter.transform.rotation = Quaternion.LookRotation(Vector3.up);
+        visibleDemoSmokeParticle = smokeEmitter.AddComponent<ParticleSystem>();
+
+        ParticleSystemRenderer renderer = smokeEmitter.GetComponent<ParticleSystemRenderer>();
+        if (renderer != null && smokeParticle != null)
+        {
+            ParticleSystemRenderer sourceRenderer = smokeParticle.GetComponent<ParticleSystemRenderer>();
+            if (sourceRenderer != null && sourceRenderer.sharedMaterial != null)
+                renderer.sharedMaterial = sourceRenderer.sharedMaterial;
+        }
+
+        ConfigureSmokeParticleForDemo(visibleDemoSmokeParticle);
+        visibleDemoSmokeParticle.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        smokeEmitter.SetActive(false);
+
+        if (createVisibleSmokeCloudForDemo)
+            CreateVisibleSmokeCloud(smokeEmitter.transform);
+
+        baseSmokeParticles.Add(visibleDemoSmokeParticle);
+        smokeParticles = baseSmokeParticles.ToArray();
+        smokeFocusTarget = smokeEmitter.transform;
+    }
+
+    void CreateVisibleSmokeCloud(Transform parent)
+    {
+        if (visibleSmokeCloudObject != null || parent == null)
+            return;
+
+        visibleSmokeCloudObject = new GameObject("FDI_VisibleSmokeCloud");
+        visibleSmokeCloudObject.transform.position = parent.position;
+        visibleSmokeCloudObject.transform.rotation = Quaternion.identity;
+        visibleSmokeCloudObject.transform.SetParent(parent, true);
+
+        Shader smokeShader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (smokeShader == null)
+            smokeShader = Shader.Find("Unlit/Color");
+        if (smokeShader == null)
+            smokeShader = Shader.Find("Standard");
+        visibleSmokeCloudMaterial = new Material(smokeShader);
+        visibleSmokeCloudMaterial.color = demoSmokeCloudColor;
+
+        Vector3[] localPositions =
+        {
+            new Vector3(0f, 0f, 0f),
+            new Vector3(-0.45f, 0.35f, 0.1f),
+            new Vector3(0.45f, 0.45f, -0.1f),
+            new Vector3(-0.2f, 0.85f, -0.35f),
+            new Vector3(0.25f, 1.05f, 0.3f),
+            new Vector3(-0.6f, 1.25f, 0.2f),
+            new Vector3(0.6f, 1.45f, -0.25f)
+        };
+
+        for (int i = 0; i < localPositions.Length; i++)
+        {
+            GameObject puff = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            puff.name = $"SmokePuff_{i + 1:00}";
+            puff.transform.SetParent(visibleSmokeCloudObject.transform, false);
+            puff.transform.localPosition = localPositions[i];
+            float scale = 0.65f + (i * 0.08f);
+            puff.transform.localScale = visibleSmokeCloudScale * scale;
+
+            Collider puffCollider = puff.GetComponent<Collider>();
+            if (puffCollider != null)
+                Destroy(puffCollider);
+
+            Renderer renderer = puff.GetComponent<Renderer>();
+            if (renderer != null)
+                renderer.sharedMaterial = visibleSmokeCloudMaterial;
+        }
+
+        visibleSmokeCloudObject.SetActive(false);
+    }
+
+    void AutoAssignTransformerRenderers()
+    {
+        bool hasRenderer = false;
+        if (transformerRenderers != null)
+        {
+            foreach (Renderer targetRenderer in transformerRenderers)
+            {
+                if (targetRenderer != null)
+                {
+                    hasRenderer = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasRenderer)
+            return;
+
+        SimpleMQTTReceiver legacyReceiver = FindFirstObjectByType<SimpleMQTTReceiver>(FindObjectsInactive.Include);
+        if (legacyReceiver != null && legacyReceiver.transformerRenderer != null)
+            transformerRenderers = new[] { legacyReceiver.transformerRenderer };
     }
 
     void Connect()
     {
+        if (IsConnected())
+            return;
+
+        CloseMqttConnection(true);
+
         try
         {
-            tcpClient = new TcpClient(brokerAddress, brokerPort);
+            string connectAddress = NormalizeBrokerAddress(brokerAddress);
+            tcpClient = new TcpClient(AddressFamily.InterNetwork);
+            tcpClient.ReceiveTimeout = MqttHandshakeTimeoutMs;
+            tcpClient.SendTimeout = MqttHandshakeTimeoutMs;
+            tcpClient.Connect(connectAddress, brokerPort);
             stream = tcpClient.GetStream();
+            stream.ReadTimeout = MqttHandshakeTimeoutMs;
+            stream.WriteTimeout = MqttHandshakeTimeoutMs;
 
             SendConnectPacket();
             if (!WaitForConnAck())
@@ -192,6 +468,8 @@ public class CoolingFalseDataReceiver : MonoBehaviour
 
             SendSubscribePacket(subscriptionTopic);
             WaitForSubAck();
+            tcpClient.ReceiveTimeout = 0;
+            stream.ReadTimeout = Timeout.Infinite;
 
             isRunning = true;
             mqttThread = new Thread(ListenForMessages);
@@ -199,13 +477,29 @@ public class CoolingFalseDataReceiver : MonoBehaviour
             mqttThread.Start();
 
             isConnected = true;
-            Debug.Log($"[CoolingFalseDataReceiver] Connected to MQTT broker {brokerAddress}:{brokerPort}, subscribed to {subscriptionTopic}");
+            nextReconnectTime = Time.unscaledTime + reconnectIntervalSeconds;
+            Debug.Log($"[CoolingFalseDataReceiver] Connected to MQTT broker {connectAddress}:{brokerPort}, subscribed to {subscriptionTopic}");
         }
         catch (Exception ex)
         {
             isConnected = false;
+            isRunning = false;
+            nextReconnectTime = Time.unscaledTime + Mathf.Max(0.5f, reconnectIntervalSeconds);
             Debug.LogWarning($"[CoolingFalseDataReceiver] MQTT connection failed. Check broker {brokerAddress}:{brokerPort}. Error: {ex.Message}");
+            CloseMqttConnection(false);
         }
+    }
+
+    string NormalizeBrokerAddress(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return "127.0.0.1";
+
+        string trimmed = address.Trim();
+        if (string.Equals(trimmed, "localhost", StringComparison.OrdinalIgnoreCase))
+            return "127.0.0.1";
+
+        return trimmed;
     }
 
     void SendConnectPacket()
@@ -304,6 +598,7 @@ public class CoolingFalseDataReceiver : MonoBehaviour
         }
 
         isConnected = false;
+        isRunning = false;
     }
 
     bool WaitForConnAck()
@@ -404,7 +699,11 @@ public class CoolingFalseDataReceiver : MonoBehaviour
                topic == "substation/transformer/displayed_temperature" ||
                topic == "substation/transformer/real_temperature" ||
                topic == "substation/effect/smoke" ||
-               topic == "substation/alarm/suppression";
+               topic == "substation/alarm/suppression" ||
+               topic == "substation/transformer/oil_temperature" ||
+               topic == "substation/transformer/oil_level" ||
+               topic == "substation/protection/buchholz" ||
+               topic == "substation/transformer/oil_alarm";
     }
 
     void EnqueueMessage(string topic, string payload)
@@ -494,16 +793,311 @@ public class CoolingFalseDataReceiver : MonoBehaviour
 
     void ApplySmokeState()
     {
+        if (fdiSmokeEffectController == null)
+            fdiSmokeEffectController = FDISmokeEffectController.GetOrCreate();
+        if (fdiSmokeEffectController != null)
+        {
+            if (smokeOn)
+                fdiSmokeEffectController.StartSmokeAttack();
+            else
+                fdiSmokeEffectController.StopSmokeAttack();
+            return;
+        }
+
         if (smokeObject != null)
             smokeObject.SetActive(smokeOn);
+        if (visibleSmokeCloudObject != null)
+            visibleSmokeCloudObject.SetActive(smokeOn);
+
+        if (smokeOn && focusCameraOnSmokeAttack)
+            StartSmokeFocusSequence();
+
+        if (smokeParticles != null && smokeParticles.Length > 0)
+        {
+            foreach (ParticleSystem particle in smokeParticles)
+                ApplySmokeParticle(particle);
+            return;
+        }
 
         if (smokeParticle == null)
             return;
 
+        ApplySmokeParticle(smokeParticle);
+    }
+
+    void ApplySmokeParticle(ParticleSystem particle)
+    {
+        if (particle == null)
+            return;
+
+        if (configureSmokeForDemo)
+            ConfigureSmokeParticleForDemo(particle);
+
+        particle.gameObject.SetActive(smokeOn);
+
         if (smokeOn)
-            smokeParticle.Play();
+        {
+            if (!particle.isPlaying)
+                particle.Play(true);
+            particle.Emit(80);
+        }
         else
-            smokeParticle.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+        {
+            particle.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        }
+    }
+
+    void SetOilCriticalAlarm(bool active, string reason)
+    {
+        if (active)
+        {
+            bool firstActivation = !oilCriticalAlarmActive;
+            oilCriticalAlarmActive = true;
+            falseDataInjectionActive = true;
+            ApplyOilAlarmVisualState();
+
+            if (fdiSmokeEffectController == null)
+                fdiSmokeEffectController = FDISmokeEffectController.GetOrCreate();
+            if (fdiSmokeEffectController != null)
+                fdiSmokeEffectController.StartSmokeAttack();
+
+            if (firstActivation)
+            {
+                AppendLog("OIL TEMP HIGH");
+                AppendLog("BUCHHOLZ RELAY WARNING");
+                AppendLog($"Oil temperature: {oilTemperature:F0} C");
+                AppendLog($"Oil level: {oilLevel:F0}%");
+                AppendSecurityLog("Transformer Oil Critical Alarm Attack Detected");
+
+                if (alarmPanelController != null)
+                {
+                    alarmPanelController.AddAlarm("OIL TEMP HIGH", AlarmPanelController.AlarmSeverity.Critical);
+                    alarmPanelController.AddAlarm("BUCHHOLZ RELAY WARNING", AlarmPanelController.AlarmSeverity.Critical);
+                }
+            }
+
+            Debug.LogWarning($"[CoolingFalseDataReceiver][OIL] {reason}");
+            return;
+        }
+
+        if (!oilCriticalAlarmActive)
+            return;
+
+        oilCriticalAlarmActive = false;
+        buchholzRelayWarning = false;
+        falseDataInjectionActive = false;
+        oilTemperature = normalOilTemperature;
+        oilLevel = normalOilLevel;
+        RestoreOriginalMaterialState();
+
+        if (fdiSmokeEffectController != null)
+            fdiSmokeEffectController.StopSmokeAttack();
+
+        AppendLog("Oil critical alarm cleared");
+        AppendLog($"Oil temperature: {oilTemperature:F0} C");
+        AppendLog($"Oil level: {oilLevel:F0}%");
+        Debug.Log($"[CoolingFalseDataReceiver][OIL] {reason}");
+    }
+
+    void ApplyOilAlarmVisualState()
+    {
+        if (transformerMaterial != null)
+            ApplyMaterialHeat(transformerMaterial, oilAlarmColor, oilAlarmEmissionColor);
+
+        if (transformerRenderers == null)
+            return;
+
+        foreach (Renderer targetRenderer in transformerRenderers)
+        {
+            if (targetRenderer == null)
+                continue;
+
+            ApplyMaterialHeat(targetRenderer.material, oilAlarmColor, oilAlarmEmissionColor);
+        }
+    }
+
+    void ConfigureSmokeParticleForDemo(ParticleSystem particle)
+    {
+        ParticleSystem.MainModule main = particle.main;
+        main.loop = true;
+        main.playOnAwake = false;
+        main.simulationSpace = ParticleSystemSimulationSpace.World;
+        main.startLifetime = demoSmokeLifetime;
+        main.startSpeed = demoSmokeStartSpeed;
+        main.startSize = demoSmokeStartSize;
+        main.startColor = demoSmokeColor;
+
+        ParticleSystem.EmissionModule emission = particle.emission;
+        emission.enabled = true;
+        emission.rateOverTime = demoSmokeEmissionRate;
+
+        ParticleSystem.ShapeModule shape = particle.shape;
+        shape.enabled = true;
+        shape.angle = 22f;
+        shape.radius = 0.25f;
+
+        ParticleSystemRenderer renderer = particle.GetComponent<ParticleSystemRenderer>();
+        if (renderer != null)
+        {
+            renderer.enabled = true;
+            renderer.maxParticleSize = 2.5f;
+            renderer.sortingFudge = 2f;
+        }
+    }
+
+    void StartSmokeFocusSequence()
+    {
+        Transform target = ResolveSmokeFocusTarget();
+        Camera cameraToMove = smokeFocusCamera != null ? smokeFocusCamera : Camera.main;
+
+        if (target == null || cameraToMove == null)
+        {
+            Debug.LogWarning("[CoolingFalseDataReceiver] Smoke focus skipped; camera or smoke target is missing.");
+            return;
+        }
+
+        StartSmokeFocus(cameraToMove, target);
+    }
+
+    Transform ResolveSmokeFocusTarget()
+    {
+        if (smokeFocusTarget != null)
+            return smokeFocusTarget;
+
+        if (!string.IsNullOrWhiteSpace(smokeFocusTargetName))
+        {
+            GameObject namedTarget = GameObject.Find(smokeFocusTargetName);
+            if (namedTarget != null)
+            {
+                smokeFocusTarget = namedTarget.transform;
+                return smokeFocusTarget;
+            }
+        }
+
+        if (smokeParticle != null)
+            return smokeParticle.transform;
+
+        if (smokeParticles != null)
+        {
+            foreach (ParticleSystem particle in smokeParticles)
+            {
+                if (particle != null)
+                    return particle.transform;
+            }
+        }
+
+        return null;
+    }
+
+    void StartSmokeFocus(Camera cameraToMove, Transform target)
+    {
+        Transform cameraTransform = cameraToMove.transform;
+        Transform originalParent = cameraTransform.parent;
+        Vector3 originalLocalPosition = cameraTransform.localPosition;
+        Quaternion originalLocalRotation = cameraTransform.localRotation;
+        Vector3 originalWorldPosition = cameraTransform.position;
+        Quaternion originalWorldRotation = cameraTransform.rotation;
+        float originalFieldOfView = cameraToMove.fieldOfView;
+
+        Behaviour brain = cameraToMove.GetComponent("CinemachineBrain") as Behaviour;
+        bool brainWasEnabled = brain != null && brain.enabled;
+
+        FPSKontrol fpsKontrol = FindFirstObjectByType<FPSKontrol>(FindObjectsInactive.Include);
+        bool fpsWasEnabled = fpsKontrol != null && fpsKontrol.enabled;
+
+        if (fpsKontrol != null)
+            fpsKontrol.enabled = false;
+
+        if (disableCinemachineBrainDuringSmokeFocus && brain != null)
+            brain.enabled = false;
+
+        cameraTransform.SetParent(null, true);
+        cameraToMove.fieldOfView = smokeFocusFieldOfView;
+
+        Vector3 lookPoint = target.position + smokeLookOffset;
+        cameraTransform.position = GetSmokeFocusPosition(target, originalWorldPosition);
+        cameraTransform.LookAt(lookPoint);
+
+        Debug.Log("[CoolingFalseDataReceiver] Smoke focus started. Camera will restore after 5 seconds.");
+
+        smokeFocusActive = true;
+        smokeFocusRestoreTimer?.Dispose();
+        smokeFocusRestoreTimer = new Timer(_ =>
+        {
+            SynchronizationContext context = unityContext;
+            if (context != null)
+            {
+                context.Post(__ => RestoreSmokeFocus(cameraToMove, cameraTransform, originalParent, originalLocalPosition, originalLocalRotation, originalWorldPosition, originalWorldRotation, originalFieldOfView, brain, brainWasEnabled, fpsKontrol, fpsWasEnabled), null);
+            }
+            else
+            {
+                Debug.LogWarning("[CoolingFalseDataReceiver] Smoke focus restore skipped; Unity SynchronizationContext is missing.");
+            }
+        }, null, (int)(Mathf.Max(0.1f, smokeFocusHoldSeconds) * 1000f), Timeout.Infinite);
+    }
+
+    void RestoreSmokeFocus(
+        Camera cameraToMove,
+        Transform cameraTransform,
+        Transform originalParent,
+        Vector3 originalLocalPosition,
+        Quaternion originalLocalRotation,
+        Vector3 originalWorldPosition,
+        Quaternion originalWorldRotation,
+        float originalFieldOfView,
+        Behaviour brain,
+        bool brainWasEnabled,
+        FPSKontrol fpsKontrol,
+        bool fpsWasEnabled)
+    {
+        if (!smokeFocusActive)
+            return;
+
+        if (cameraToMove != null && cameraTransform != null)
+        {
+            cameraToMove.fieldOfView = originalFieldOfView;
+            cameraTransform.SetParent(originalParent, true);
+
+            if (originalParent != null)
+            {
+                cameraTransform.localPosition = originalLocalPosition;
+                cameraTransform.localRotation = originalLocalRotation;
+            }
+            else
+            {
+                cameraTransform.position = originalWorldPosition;
+                cameraTransform.rotation = originalWorldRotation;
+            }
+        }
+
+        if (brain != null)
+            brain.enabled = brainWasEnabled;
+
+        if (fpsKontrol != null)
+        {
+            fpsKontrol.enabled = fpsWasEnabled;
+            if (fpsWasEnabled)
+                fpsKontrol.SetTerminalDurumu(false);
+        }
+
+        smokeFocusRestoreTimer?.Dispose();
+        smokeFocusRestoreTimer = null;
+        smokeFocusActive = false;
+        Debug.Log("[CoolingFalseDataReceiver] Smoke focus finished. Camera restored to previous user view.");
+    }
+
+    Vector3 GetSmokeFocusPosition(Transform target, Vector3 viewerWorldPosition)
+    {
+        return target.position + smokeFocusOffset;
+    }
+
+    Transform FindFocusReference(string objectName)
+    {
+        if (string.IsNullOrWhiteSpace(objectName))
+            return null;
+
+        GameObject referenceObject = GameObject.Find(objectName);
+        return referenceObject != null ? referenceObject.transform : null;
     }
 
     void ApplyAlarmSuppressionState()
@@ -537,8 +1131,12 @@ public class CoolingFalseDataReceiver : MonoBehaviour
         smokeOn = false;
         alarmSuppressionOn = false;
         falseDataInjectionActive = false;
+        oilCriticalAlarmActive = false;
+        buchholzRelayWarning = false;
         fakeTemperature = 42f;
         realTemperature = 45f;
+        oilTemperature = normalOilTemperature;
+        oilLevel = normalOilLevel;
 
         ApplyCoolingState();
         RestoreOriginalMaterialState();
@@ -645,15 +1243,37 @@ public class CoolingFalseDataReceiver : MonoBehaviour
 
     void OnDestroy()
     {
-        isRunning = false;
+        CloseMqttConnection(true);
+        smokeFocusRestoreTimer?.Dispose();
+        smokeFocusRestoreTimer = null;
+    }
 
-        if (mqttThread != null && mqttThread.IsAlive)
+    void CloseMqttConnection(bool waitForThread)
+    {
+        isRunning = false;
+        isConnected = false;
+
+        lock (streamLock)
+        {
+            if (stream != null)
+            {
+                try { stream.Close(); }
+                catch (Exception) { }
+                stream = null;
+            }
+
+            if (tcpClient != null)
+            {
+                try { tcpClient.Close(); }
+                catch (Exception) { }
+                tcpClient = null;
+            }
+        }
+
+        if (waitForThread && mqttThread != null && mqttThread.IsAlive)
             mqttThread.Join(1000);
 
-        if (stream != null)
-            stream.Close();
-        if (tcpClient != null)
-            tcpClient.Close();
+        mqttThread = null;
     }
 
     class MqttPacket

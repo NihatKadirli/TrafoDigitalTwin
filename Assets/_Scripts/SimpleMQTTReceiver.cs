@@ -34,6 +34,7 @@ public class SimpleMQTTReceiver : MonoBehaviour
     public Light alarmLight;
     public GameObject explosionEffect;
     public Camera cameraShake;
+    public bool enableFailureCameraShake = false;
     public float cameraShakeAmount = 0.08f;
     
     [Header("MQTT Settings")]
@@ -521,7 +522,7 @@ void ParseSensorData(string jsonData)
         if (explosionEffect != null && explosionEffect.activeSelf != active)
             explosionEffect.SetActive(active);
 
-        if (active)
+        if (active && enableFailureCameraShake)
             ApplyCameraShake();
         else
             RestoreCameraPosition();
